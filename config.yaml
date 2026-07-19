@@ -1,0 +1,94 @@
+# FBA Deal Scanner — thresholds, feeds, category rank table.
+# Secrets (DATABASE_URL, KEEPA_API_KEY, DISCORD_WEBHOOK_URL, PWA_SHARED_SECRET)
+# live in env vars, never here. See app/config.py for how this is loaded.
+
+thresholds:
+  min_roi: 0.30                # hard-reject below this (spec default: 30%)
+  min_net_profit_pence: 300    # hard-reject below this (spec default: £3)
+  max_fba_offers: 6            # hard-reject above this offer count
+  rank_history_min_days: 90    # soft flag "<90 days of rank history" below this
+  price_spike_pct: 0.20        # soft flag if buy box >20% above 90-day average
+  cooldown_hours: 24           # don't re-ping same ASIN within this window...
+  cooldown_price_improve_pct: 0.10   # ...unless buy price improved by >=10%
+
+# vat_registered: true -> fee_vat_mult = 1.0 (fees reclaimed).
+# false -> 1.20 (Amazon's 20% VAT on fees is unrecoverable). Set to your
+# actual registration status — defaults to the conservative (worse-case) value.
+vat_registered: false
+
+# Reject anything flagged oversize tier (see fees.size_tier_thresholds_cm_kg).
+reject_oversize: true
+
+# Category names as they appear in Keepa's categoryTree[].name. Anything not
+# listed falls back to `default_rank_threshold`. Placeholder values — tune
+# against realised sell-through once scores/outcomes data exists.
+category_rank_thresholds:
+  default_rank_threshold: 150000
+  "Toys & Games": 80000
+  "Home & Kitchen": 100000
+  "Kitchen & Home": 100000
+  "Electronics": 60000
+  "Computers & Accessories": 60000
+  "PC": 60000
+  "Video Games": 40000
+  "Health & Personal Care": 120000
+  "Beauty": 120000
+  "Sports & Outdoors": 100000
+  "Tools & Home Improvement": 100000
+  "Grocery": 200000
+  "Pet Supplies": 100000
+
+# Categories to never ping regardless of numbers (Keepa categoryTree name match).
+category_blocklist: []
+
+hukd:
+  poll_interval_minutes: 7
+  # RSS feeds to poll. hotukdeals redirects /rss/hot -> /rss/trending (confirmed
+  # live 2026-07-19) — use the resolved URL directly. Add keyword/category feeds
+  # as needed, e.g. https://www.hotukdeals.com/rss/keyword/<term>.
+  feeds:
+    - name: trending
+      url: "https://www.hotukdeals.com/rss/trending"
+
+decision:
+  inbound_shipping_pence: 40   # spec default £0.40/unit
+
+# Category-based fee estimate fallback (SP-API not live yet). Ballpark figures
+# based on Amazon UK's public referral-fee schedule and FBA size tiers — verify
+# against Amazon's current published rates before trusting the numbers; every
+# ping using this table is marked fees=estimated regardless.
+fees:
+  default_referral_pct: 0.15
+  category_referral_pct:
+    "Electronics": 0.08
+    "Computers & Accessories": 0.08
+    "PC": 0.08
+    "Video Games": 0.15
+    "Toys & Games": 0.15
+    "Home & Kitchen": 0.15
+    "Kitchen & Home": 0.15
+    "Health & Personal Care": 0.15
+    "Beauty": 0.15
+    "Sports & Outdoors": 0.15
+    "Tools & Home Improvement": 0.15
+    "Grocery": 0.15
+    "Pet Supplies": 0.15
+  # FBA fulfilment fee by size tier, in pence. Placeholder ballparks — replace
+  # with Amazon UK's current published FBA fee schedule.
+  fba_fee_by_size_tier_pence:
+    small_standard: 230
+    standard: 320
+    large_standard: 450
+    oversize: 900
+  # Monthly storage fee per unit, pence — used in est_months_to_sell calc.
+  # Rough blended standard-size non-peak rate; oversize items cost more.
+  monthly_storage_fee_pence:
+    standard: 27
+    oversize: 60
+  # Simplified UK FBA size-tier breakpoints (max dimension in cm, max weight
+  # in kg). First tier a product fits under (in this order) wins.
+  size_tier_thresholds_cm_kg:
+    small_standard: {max_weight_kg: 0.46, max_longest_cm: 35, max_dims_sum_cm: 60}
+    standard:       {max_weight_kg: 9.0,  max_longest_cm: 45, max_dims_sum_cm: 90}
+    large_standard: {max_weight_kg: 23.0, max_longest_cm: 61, max_dims_sum_cm: 210}
+    # anything larger/heavier than large_standard is oversize
