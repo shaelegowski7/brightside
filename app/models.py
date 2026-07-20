@@ -94,6 +94,22 @@ class Ping(Base):
     ts = Column(DateTime(timezone=True), default=utcnow)
 
 
+class CrawlState(Base):
+    """Last-seen price per (retailer, url_hash) for retailer clearance
+    scrapers (Phase 2). Diffing against this is how a scraper knows to emit
+    an event only for a new item or a price drop vs the previous crawl —
+    an unchanged row means "skip, nothing to do". url_hash is a sha256 hex
+    digest of the product URL (see app/sources/crawl_state.py), not the raw
+    URL, so the key stays a fixed, indexable size regardless of URL length."""
+
+    __tablename__ = "crawl_state"
+
+    retailer = Column(String, primary_key=True)
+    url_hash = Column(String, primary_key=True)
+    last_price = Column(Integer, nullable=False)   # pence
+    last_seen = Column(DateTime(timezone=True), default=utcnow)
+
+
 class TokenLog(Base):
     """One row per Keepa API call. Kept indefinitely for the first two weeks
     per the spec to validate the token-budget estimates; cheap enough to

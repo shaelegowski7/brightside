@@ -119,6 +119,33 @@ def test_no_match_found_pings_unverified_without_keepa_call(db_session, monkeypa
     assert "UNVERIFIED MATCH" in sent_embeds[0]["title"]
 
 
+def test_scraper_deal_with_html_skips_resolver(db_session, monkeypatch):
+    """A RawDeal with html already set (retailer scraper, e.g. Argos) must
+    not call resolver.resolve() at all — url is already the final retailer
+    page, unlike HUKD deals which need the redirect wrapper followed."""
+    raw = RawDeal(
+        source="argos", retailer="Argos", title="Clearance Widget",
+        url="https://www.argos.co.uk/product/7654321",
+        buy_price_pence=1500, image_url=None,
+        html="<html><body>no structured data</body></html>",
+    )
+
+    def _boom(url):
+        raise AssertionError("resolver.resolve must not be called for scraper deals")
+    monkeypatch.setattr(resolver, "resolve", _boom)
+
+    sent_embeds = []
+    import app.discord_notifier as dn
+    monkeypatch.setattr(dn, "send_ping", lambda webhook_url, embed: sent_embeds.append(embed) or True)
+
+    pipeline.process_deal(db_session, raw, _decision_cfg(), _fee_provider(), _APP_CFG)
+
+    deal = db_session.query(models.Deal).filter(models.Deal.url == raw.url).first()
+    assert deal.retailer_url == raw.url
+    assert deal.status == "unverified_pinged"   # no JSON-LD in the fixture html -> no match
+    assert len(sent_embeds) == 1
+
+
 def test_same_price_resurface_is_skipped(db_session, monkeypatch):
     raw = RawDeal(
         source="hotukdeals", retailer="Amazon", title="Repeat Deal",

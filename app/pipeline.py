@@ -28,12 +28,17 @@ def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_pr
     if deal is None:
         return   # unchanged price, already at a stable terminal status
 
-    resolved = resolver.resolve(raw.url)
-    if resolved is None:
-        deal.status = "unresolvable"
-        db.commit()
-        print(f"[PIPELINE] {raw.url}: not a recognisable thread URL, skipping")
-        return
+    if raw.html is not None:
+        # Retailer scraper deal: raw.url is already the final retailer page
+        # and raw.html is already fetched — no HUKD redirect to follow.
+        resolved = resolver.ResolvedDeal(final_url=raw.url, html=raw.html, status_code=200, blocked=False)
+    else:
+        resolved = resolver.resolve(raw.url)
+        if resolved is None:
+            deal.status = "unresolvable"
+            db.commit()
+            print(f"[PIPELINE] {raw.url}: not a recognisable thread URL, skipping")
+            return
 
     deal.retailer_url = resolved.final_url
     if resolved.blocked:
