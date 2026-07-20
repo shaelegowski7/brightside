@@ -1,5 +1,6 @@
 from app.matching.amazon_url import extract_asin
 from app.matching.jsonld import extract_ean
+from app.sources import argos   # noqa: F401 — import registers the Argos RETAILER_EXTRACTORS override
 
 
 def test_extract_asin_from_real_confirmed_redirect_url():
@@ -53,3 +54,19 @@ def test_extract_ean_from_microdata_fallback():
 def test_extract_ean_returns_none_when_absent():
     html = "<html><body><p>No structured data here.</p></body></html>"
     assert extract_ean("https://www.example-retailer.co.uk/p/widget", html) is None
+
+
+def test_extract_ean_dispatches_to_argos_override():
+    # Argos has no structured gtin field — the EAN is free text inside the
+    # Product JSON-LD's description (see app/sources/argos.py). The generic
+    # extractor alone would find nothing here; this proves RETAILER_EXTRACTORS
+    # is actually wired up for www.argos.co.uk, not just unit-testable in
+    # isolation.
+    html = """
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@graph":[
+        {"@type":"Product","name":"Widget","description":"Some blurb. EAN: 196388561070. More text."}
+    ]}
+    </script>
+    """
+    assert extract_ean("https://www.argos.co.uk/product/1234567", html) == "196388561070"

@@ -21,6 +21,7 @@ class Settings:
     discord_webhook_url: str
     pwa_shared_secret: str
     environment: str
+    scraperapi_key: str
 
 
 @lru_cache
@@ -31,6 +32,7 @@ def get_settings() -> Settings:
         discord_webhook_url=os.environ.get("DISCORD_WEBHOOK_URL", ""),
         pwa_shared_secret=os.environ.get("PWA_SHARED_SECRET", ""),
         environment=os.environ.get("ENVIRONMENT", "development"),
+        scraperapi_key=os.environ.get("SCRAPERAPI_KEY", ""),
     )
 
 

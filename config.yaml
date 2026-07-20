@@ -53,6 +53,22 @@ hukd:
 decision:
   inbound_shipping_pence: 40   # spec default £0.40/unit
 
+# Argos clearance scraper (Phase 2). Requires SCRAPERAPI_KEY — Argos's Akamai
+# edge blocks every direct request from this app's hosting IP (confirmed
+# 2026-07-20, even robots.txt), so fetches route through ScraperAPI's proxy
+# pool. `enabled: false` by default: flipping it on triggers a one-off
+# backfill pass of every current item in each listed category (spec: "no
+# historical backfill, current inventory only"), which costs one ScraperAPI
+# request per listing page *plus* one per new/changed product — budget
+# accordingly against your ScraperAPI plan before adding more categories.
+argos:
+  enabled: false
+  poll_interval_minutes: 180
+  min_delay_seconds: 5
+  max_delay_seconds: 15
+  category_urls:
+    - "https://www.argos.co.uk/clearance/technology/c:29949/"
+
 # Category-based fee estimate fallback (SP-API not live yet). Ballpark figures
 # based on Amazon UK's public referral-fee schedule and FBA size tiers — verify
 # against Amazon's current published rates before trusting the numbers; every
