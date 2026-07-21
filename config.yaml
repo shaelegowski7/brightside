@@ -77,7 +77,7 @@ argos:
 # Cheap per poll (one listing-page request unless something actually drops),
 # so a tighter interval than Argos is affordable — tune to taste.
 pokemon_center:
-  enabled: false
+  enabled: true
   poll_interval_minutes: 15
   min_delay_seconds: 3
   max_delay_seconds: 8
