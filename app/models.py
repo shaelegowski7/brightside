@@ -110,6 +110,21 @@ class CrawlState(Base):
     last_seen = Column(DateTime(timezone=True), default=utcnow)
 
 
+class StockState(Base):
+    """Last-seen stock status per (retailer, url_hash) for restock/new-release
+    monitors (Phase 3, e.g. Pokemon Center) — a *stock-status* transition,
+    not a price comparison, hence a separate table from crawl_state (spec:
+    "New-releases/stock-drop monitoring — separate module, different
+    logic"). See app/sources/stock_state.py for the diffing helper."""
+
+    __tablename__ = "stock_state"
+
+    retailer = Column(String, primary_key=True)
+    url_hash = Column(String, primary_key=True)
+    in_stock = Column(Boolean, nullable=False)
+    last_seen = Column(DateTime(timezone=True), default=utcnow)
+
+
 class TokenLog(Base):
     """One row per Keepa API call. Kept indefinitely for the first two weeks
     per the spec to validate the token-budget estimates; cheap enough to

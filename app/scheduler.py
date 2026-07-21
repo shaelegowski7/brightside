@@ -13,6 +13,7 @@ from .decision.engine import DecisionConfig
 from .pricing.fees import FeeTableProvider
 from .sources.argos import ArgosAdapter
 from .sources.hotukdeals import HotUKDealsAdapter
+from .sources.pokemon_center import PokemonCenterAdapter
 
 scheduler = BackgroundScheduler()
 
@@ -68,6 +69,32 @@ def poll_argos_clearance() -> None:
         db.close()
 
 
+def poll_pokemon_center() -> None:
+    app_cfg = get_config()
+    pc_cfg = app_cfg.get("pokemon_center", {})
+    decision_cfg = DecisionConfig.from_app_config(app_cfg)
+    fee_provider = FeeTableProvider(app_cfg["fees"])
+    adapter = PokemonCenterAdapter(
+        category_urls=pc_cfg["category_urls"],
+        api_key=get_settings().scraperapi_key,
+        min_delay_s=pc_cfg["min_delay_seconds"],
+        max_delay_s=pc_cfg["max_delay_seconds"],
+    )
+
+    db = SessionLocal()
+    try:
+        raw_deals = adapter.crawl(db)
+        print(f"[SCHEDULER] pokemon_center: {len(raw_deals)} drop(s)")
+        for raw in raw_deals:
+            try:
+                pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
+            except Exception as e:
+                db.rollback()
+                print(f"[SCHEDULER] {raw.url}: processing error: {e}")
+    finally:
+        db.close()
+
+
 def start_scheduler() -> None:
     app_cfg = get_config()
     interval_minutes = app_cfg["hukd"]["poll_interval_minutes"]
@@ -92,6 +119,19 @@ def start_scheduler() -> None:
             replace_existing=True,
         )
         print(f"[SCHEDULER] argos clearance enabled, polling every {argos_interval}m")
+
+    pc_cfg = app_cfg.get("pokemon_center", {})
+    if pc_cfg.get("enabled", False):
+        pc_interval = pc_cfg["poll_interval_minutes"]
+        scheduler.add_job(
+            poll_pokemon_center,
+            IntervalTrigger(minutes=pc_interval),
+            id="poll_pokemon_center",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        print(f"[SCHEDULER] pokemon_center enabled, polling every {pc_interval}m")
 
     scheduler.start()
     print(f"[SCHEDULER] started, polling every {interval_minutes}m")

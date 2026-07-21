@@ -69,6 +69,21 @@ argos:
   category_urls:
     - "https://www.argos.co.uk/clearance/technology/c:29949/"
 
+# Pokemon Center UK restock/new-release monitor (Phase 3). Different signal
+# than Argos: a "drop" is a stock-status transition, not a price change (see
+# app/sources/pokemon_center.py). No EAN on this site at all, and no Keepa
+# title-search fallback was built (project decision 2026-07-21) — every drop
+# pings as "UNVERIFIED MATCH — check manually", with no ROI/price scoring.
+# Cheap per poll (one listing-page request unless something actually drops),
+# so a tighter interval than Argos is affordable — tune to taste.
+pokemon_center:
+  enabled: false
+  poll_interval_minutes: 15
+  min_delay_seconds: 3
+  max_delay_seconds: 8
+  category_urls:
+    - "https://www.pokemoncenter.com/en-gb/category/new-releases"
+
 # Category-based fee estimate fallback (SP-API not live yet). Ballpark figures
 # based on Amazon UK's public referral-fee schedule and FBA size tiers — verify
 # against Amazon's current published rates before trusting the numbers; every

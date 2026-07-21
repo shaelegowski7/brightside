@@ -22,6 +22,15 @@ from .sources.base import RawDeal
 # judgement about the deal.
 _RETRIABLE_STATUSES = {"new", "resolved", "fetch_blocked"}
 
+# Sources whose own upstream diff mechanism already gates whether
+# process_deal() gets called at all, so a same-price resurface here is
+# never a stale repeat -- it's always a fresh event worth reprocessing.
+# Pokemon Center's stock_state only emits on a genuine OOS->in-stock
+# transition (see sources/pokemon_center.py); its RRP doesn't move between
+# restocks, so the deals-table same-price skip would otherwise silently
+# suppress every restock after the first.
+_ALWAYS_RETRIABLE_SOURCES = {"pokemon_center"}
+
 
 def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_provider: FeeProvider, app_cfg: dict) -> None:
     deal = _upsert_deal(db, raw)
@@ -150,7 +159,9 @@ def _upsert_deal(db: Session, raw: RawDeal) -> models.Deal | None:
         db.refresh(deal)
         return deal
 
-    if existing.buy_price == raw.buy_price_pence and existing.status not in _RETRIABLE_STATUSES:
+    same_price = existing.buy_price == raw.buy_price_pence
+    stale_terminal_status = existing.status not in _RETRIABLE_STATUSES
+    if same_price and stale_terminal_status and raw.source not in _ALWAYS_RETRIABLE_SOURCES:
         existing.last_seen = models.utcnow()
         db.commit()
         return None

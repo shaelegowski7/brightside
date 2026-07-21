@@ -170,6 +170,33 @@ def test_keepa_fulfilment_fee_yields_clean_pass_not_estimated(db_session, monkey
     assert score.roi == pytest.approx(0.647)
 
 
+def test_pokemon_center_restock_reprocesses_at_same_price(db_session, monkeypatch):
+    """Pokemon Center's RRP doesn't move between restocks -- stock_state
+    (upstream of process_deal) is what gates freshness, so a same-price
+    resurface here must NOT be suppressed the way an ordinary same-price
+    HUKD/Argos resurface would be (see pipeline.py's _ALWAYS_RETRIABLE_SOURCES)."""
+    raw = RawDeal(
+        source="pokemon_center", retailer="Pokemon Center", title="Elite Trainer Box",
+        url="https://www.pokemoncenter.com/en-gb/product/1/etb",
+        buy_price_pence=5699, image_url=None, html="<html><body>no structured data</body></html>",
+    )
+
+    sent_embeds = []
+    import app.discord_notifier as dn
+    monkeypatch.setattr(dn, "send_ping", lambda webhook_url, embed: sent_embeds.append(embed) or True)
+
+    # First drop: pings unverified (no EAN/ASIN on this site).
+    pipeline.process_deal(db_session, raw, _decision_cfg(), _fee_provider(), _APP_CFG)
+    deal = db_session.query(models.Deal).filter(models.Deal.url == raw.url).first()
+    assert deal.status == "unverified_pinged"
+    assert len(sent_embeds) == 1
+
+    # Restocked again later at the identical RRP -- must still re-ping, not
+    # get silently skipped as "unchanged".
+    pipeline.process_deal(db_session, raw, _decision_cfg(), _fee_provider(), _APP_CFG)
+    assert len(sent_embeds) == 2
+
+
 def test_scraper_deal_with_html_skips_resolver(db_session, monkeypatch):
     """A RawDeal with html already set (retailer scraper, e.g. Argos) must
     not call resolver.resolve() at all — url is already the final retailer
