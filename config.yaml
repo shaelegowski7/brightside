@@ -62,7 +62,7 @@ decision:
 # request per listing page *plus* one per new/changed product — budget
 # accordingly against your ScraperAPI plan before adding more categories.
 argos:
-  enabled: false
+  enabled: true
   poll_interval_minutes: 180
   min_delay_seconds: 5
   max_delay_seconds: 15
