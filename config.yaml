@@ -49,6 +49,24 @@ hukd:
   feeds:
     - name: trending
       url: "https://www.hotukdeals.com/rss/trending"
+  # Merchants that can never be a physical-goods FBA resale candidate —
+  # flights/hotels/restaurants (not goods at all) and digital storefronts
+  # (game keys, iTunes purchases — nothing to ship/resell). Filtered before
+  # any resolver/Keepa call, not just before pinging. Exact match against
+  # the feed's merchant name, case-insensitive. Derived from real
+  # unverified_pinged noise observed live 2026-07-21 — see conversation.
+  # Deliberately NOT blocking grocery chains (Lidl etc. run genuine non-food
+  # specials) or "Apple Store"/"Xbox" (ambiguous: could be physical hardware
+  # deals, not just digital) — those need better matching, not exclusion.
+  merchant_blocklist:
+    - "Skyscanner"
+    - "Ryanair"
+    - "Travelodge"
+    - "McDonalds"
+    - "giffgaff"
+    - "Playstation Store"
+    - "Nintendo eShop"
+    - "Humble Bundle"
 
 decision:
   inbound_shipping_pence: 40   # spec default £0.40/unit

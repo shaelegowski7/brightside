@@ -22,6 +22,7 @@ def poll_hukd_feeds() -> None:
     app_cfg = get_config()
     decision_cfg = DecisionConfig.from_app_config(app_cfg)
     fee_provider = FeeTableProvider(app_cfg["fees"])
+    merchant_blocklist = {m.lower() for m in app_cfg["hukd"].get("merchant_blocklist", [])}
 
     db = SessionLocal()
     try:
@@ -34,6 +35,8 @@ def poll_hukd_feeds() -> None:
                 continue
             print(f"[SCHEDULER] {feed['name']}: {len(raw_deals)} item(s)")
             for raw in raw_deals:
+                if raw.retailer and raw.retailer.lower() in merchant_blocklist:
+                    continue
                 try:
                     pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
                 except Exception as e:
