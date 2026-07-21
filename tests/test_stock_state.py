@@ -38,3 +38,21 @@ def test_going_out_of_stock_then_back_is_a_drop_again(db_session):
 def test_different_retailers_are_independent(db_session):
     assert stock_state.diff_and_record(db_session, "pokemon_center", _URL, True) is True
     assert stock_state.diff_and_record(db_session, "some_other_retailer", _URL, True) is True
+
+
+def test_check_does_not_write(db_session):
+    """check() alone must not mark the item seen -- callers that need
+    interruption-safe deferred recording rely on this (see
+    pokemon_center.py)."""
+    assert stock_state.check(db_session, "pokemon_center", _URL, True) is True
+    assert stock_state.check(db_session, "pokemon_center", _URL, True) is True   # still a "drop" -- check() never wrote
+
+    row = db_session.get(models.StockState, ("pokemon_center", stock_state.url_hash(_URL)))
+    assert row is None
+
+
+def test_record_after_check_matches_diff_and_record(db_session):
+    assert stock_state.check(db_session, "pokemon_center", _URL, True) is True
+    stock_state.record(db_session, "pokemon_center", _URL, True)
+
+    assert stock_state.check(db_session, "pokemon_center", _URL, True) is False   # no longer a drop, already seen in stock

@@ -48,3 +48,25 @@ def test_different_retailers_are_independent(db_session):
 
 def test_url_hash_differs_per_url():
     assert crawl_state.url_hash(_URL) != crawl_state.url_hash(_URL + "?x=1")
+
+
+def test_check_does_not_write(db_session):
+    """check() alone must not mark the item seen -- callers that need
+    interruption-safe deferred recording rely on this (see argos.py)."""
+    assert crawl_state.check(db_session, "argos", _URL, 1999) == "new"
+    assert crawl_state.check(db_session, "argos", _URL, 1999) == "new"   # still "new" -- check() never wrote
+
+    row = db_session.get(models.CrawlState, ("argos", crawl_state.url_hash(_URL)))
+    assert row is None
+
+
+def test_record_after_check_matches_diff_and_record(db_session):
+    diff = crawl_state.check(db_session, "argos", _URL, 1999)
+    crawl_state.record(db_session, "argos", _URL, 1999)
+    assert diff == "new"
+
+    diff2 = crawl_state.check(db_session, "argos", _URL, 1499)
+    assert diff2 == "price_drop"
+    crawl_state.record(db_session, "argos", _URL, 1499)
+
+    assert crawl_state.check(db_session, "argos", _URL, 1499) == "unchanged"

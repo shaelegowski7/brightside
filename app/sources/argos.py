@@ -22,6 +22,7 @@ import random
 import re
 import time
 from dataclasses import dataclass
+from typing import Callable
 
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
@@ -111,14 +112,22 @@ class ArgosAdapter:
         self.min_delay_s = min_delay_s
         self.max_delay_s = max_delay_s
 
-    def crawl(self, db: Session) -> list[RawDeal]:
-        deals: list[RawDeal] = []
+    def crawl(self, db: Session, on_deal: Callable[[RawDeal], None]) -> int:
+        """Calls on_deal(raw) immediately for each new/changed item as it's
+        found, rather than collecting a list to hand back after the whole
+        crawl finishes — a crawl can run long (10 pages x up to 60 items x
+        up to max_delay_seconds each), and if the process is interrupted
+        mid-crawl, any RawDeal only held in memory would be lost even
+        though crawl_state had already marked those items "seen" (confirmed
+        live 2026-07-21 — see crawl_state.py's module docstring). Returns
+        the count of deals found, for the caller's own logging."""
+        count = 0
         for category_url in self.category_urls:
-            deals.extend(self._crawl_category(db, category_url))
-        return deals
+            count += self._crawl_category(db, category_url, on_deal)
+        return count
 
-    def _crawl_category(self, db: Session, category_url: str) -> list[RawDeal]:
-        deals: list[RawDeal] = []
+    def _crawl_category(self, db: Session, category_url: str, on_deal: Callable[[RawDeal], None]) -> int:
+        count = 0
         for page in range(1, _MAX_PAGES_PER_CATEGORY + 1):
             page_url = category_url if page == 1 else _page_url(category_url, page)
             self._delay()
@@ -132,27 +141,30 @@ class ArgosAdapter:
                 break
 
             for product in products:
-                deal = self._process_product(db, product)
-                if deal:
-                    deals.append(deal)
-        return deals
+                if self._process_product(db, product, on_deal):
+                    count += 1
+        return count
 
-    def _process_product(self, db: Session, product: _ListingProduct) -> RawDeal | None:
-        diff = crawl_state.diff_and_record(db, "argos", product.url, product.price_pence)
+    def _process_product(self, db: Session, product: _ListingProduct, on_deal: Callable[[RawDeal], None]) -> bool:
+        diff = crawl_state.check(db, "argos", product.url, product.price_pence)
         if diff == "unchanged":
-            return None
+            crawl_state.record(db, "argos", product.url, product.price_pence)
+            return False
 
         self._delay()
         result = scraperapi.fetch(product.url, self.api_key)
         if result is None or result[0] != 200:
-            print(f"[ARGOS] {product.url}: product page fetch failed, skipping")
-            return None
+            print(f"[ARGOS] {product.url}: product page fetch failed, skipping — will retry next crawl")
+            return False   # not recorded as seen -- self-heals on the next crawl
 
-        return RawDeal(
+        raw = RawDeal(
             source="argos", retailer="Argos", title=product.title,
             url=product.url, buy_price_pence=product.price_pence,
             image_url=None, html=result[1],
         )
+        on_deal(raw)
+        crawl_state.record(db, "argos", product.url, product.price_pence)   # only mark "seen" once on_deal has run
+        return True
 
     def _delay(self) -> None:
         time.sleep(random.uniform(self.min_delay_s, self.max_delay_s))

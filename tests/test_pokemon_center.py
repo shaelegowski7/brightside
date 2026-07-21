@@ -106,7 +106,9 @@ def test_crawl_fetches_product_page_only_on_drop(db_session, monkeypatch):
         api_key="test-key", min_delay_s=0, max_delay_s=0,
     )
 
-    deals = adapter.crawl(db_session)
+    deals = []
+    count = adapter.crawl(db_session, on_deal=deals.append)
+    assert count == 1
     assert len(deals) == 1
     assert deals[0].url == "https://www.pokemoncenter.com/en-gb/product/1/etb"
     assert deals[0].buy_price_pence == 5699
@@ -115,6 +117,43 @@ def test_crawl_fetches_product_page_only_on_drop(db_session, monkeypatch):
 
     # Second crawl, still in stock -> not a new drop -> no re-fetch of the product page.
     calls.clear()
-    deals_second = adapter.crawl(db_session)
+    deals_second = []
+    count_second = adapter.crawl(db_session, on_deal=deals_second.append)
+    assert count_second == 0
     assert deals_second == []
     assert "https://www.pokemoncenter.com/en-gb/product/1/etb" not in calls
+
+
+def test_crawl_does_not_mark_seen_when_on_deal_raises(db_session, monkeypatch):
+    """If processing a drop fails, it must not be recorded in stock_state --
+    otherwise a transient failure would permanently suppress a legitimate
+    restock (see stock_state.py's module docstring)."""
+    listing_html = _listing_html([
+        _product_ld("Booster Bundle", "https://www.pokemoncenter.com/en-gb/product/9/bb", 24.99, "GBP", True),
+    ])
+
+    def fake_fetch(url, api_key):
+        if url == "https://www.pokemoncenter.com/en-gb/category/new-releases":
+            return 200, listing_html
+        if url == "https://www.pokemoncenter.com/en-gb/product/9/bb":
+            return 200, listing_html
+        raise AssertionError(f"unexpected fetch: {url}")
+
+    monkeypatch.setattr(scraperapi, "fetch", fake_fetch)
+    monkeypatch.setattr(pokemon_center.time, "sleep", lambda s: None)
+
+    adapter = pokemon_center.PokemonCenterAdapter(
+        category_urls=["https://www.pokemoncenter.com/en-gb/category/new-releases"],
+        api_key="test-key", min_delay_s=0, max_delay_s=0,
+    )
+
+    def _boom(raw):
+        raise RuntimeError("simulated processing failure")
+
+    from app.sources import stock_state
+    try:
+        adapter.crawl(db_session, on_deal=_boom)
+    except RuntimeError:
+        pass
+
+    assert stock_state.check(db_session, "pokemon_center", "https://www.pokemoncenter.com/en-gb/product/9/bb", True) is True

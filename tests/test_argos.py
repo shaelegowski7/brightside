@@ -79,7 +79,9 @@ def test_crawl_fetches_product_page_only_for_new_or_changed_items(db_session, mo
         api_key="test-key", min_delay_s=0, max_delay_s=0,
     )
 
-    deals = adapter.crawl(db_session)
+    deals = []
+    count = adapter.crawl(db_session, on_deal=deals.append)
+    assert count == 1
     assert len(deals) == 1
     assert deals[0].url == "https://www.argos.co.uk/product/1111111"
     assert deals[0].buy_price_pence == 1000
@@ -88,9 +90,48 @@ def test_crawl_fetches_product_page_only_for_new_or_changed_items(db_session, mo
 
     # Second crawl, same price -> unchanged -> must not re-fetch the product page.
     calls.clear()
-    deals_second = adapter.crawl(db_session)
+    deals_second = []
+    count_second = adapter.crawl(db_session, on_deal=deals_second.append)
+    assert count_second == 0
     assert deals_second == []
     assert "https://www.argos.co.uk/product/1111111" not in calls
+
+
+def test_crawl_does_not_mark_seen_when_on_deal_raises(db_session, monkeypatch):
+    """If processing a found deal fails, it must not be recorded in
+    crawl_state -- otherwise a transient failure would permanently suppress
+    a legitimate deal (see crawl_state.py's module docstring)."""
+    listing_page_1 = _listing_html([{"id": "2222222", "attributes": {"name": "Widget", "price": 10.0}}])
+    listing_page_2_empty = "<html><body>no more results</body></html>"
+    product_page = _product_html("EAN: 111122223333.")
+
+    def fake_fetch(url, api_key):
+        if url == "https://www.argos.co.uk/clearance/technology/c:1/":
+            return 200, listing_page_1
+        if url == "https://www.argos.co.uk/clearance/technology/c:1/opt/page:2/":
+            return 200, listing_page_2_empty
+        if url == "https://www.argos.co.uk/product/2222222":
+            return 200, product_page
+        raise AssertionError(f"unexpected fetch: {url}")
+
+    monkeypatch.setattr(scraperapi, "fetch", fake_fetch)
+    monkeypatch.setattr(argos.time, "sleep", lambda s: None)
+
+    adapter = argos.ArgosAdapter(
+        category_urls=["https://www.argos.co.uk/clearance/technology/c:1/"],
+        api_key="test-key", min_delay_s=0, max_delay_s=0,
+    )
+
+    def _boom(raw):
+        raise RuntimeError("simulated processing failure")
+
+    from app.sources import crawl_state
+    try:
+        adapter.crawl(db_session, on_deal=_boom)
+    except RuntimeError:
+        pass
+
+    assert crawl_state.check(db_session, "argos", "https://www.argos.co.uk/product/2222222", 1000) == "new"
 
 
 def test_crawl_stops_category_on_fetch_failure(db_session, monkeypatch):
@@ -101,4 +142,4 @@ def test_crawl_stops_category_on_fetch_failure(db_session, monkeypatch):
         category_urls=["https://www.argos.co.uk/clearance/technology/c:1/"],
         api_key="test-key", min_delay_s=0, max_delay_s=0,
     )
-    assert adapter.crawl(db_session) == []
+    assert adapter.crawl(db_session, on_deal=lambda raw: None) == 0

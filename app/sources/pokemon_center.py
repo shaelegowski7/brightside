@@ -28,6 +28,7 @@ import json
 import random
 import time
 from dataclasses import dataclass
+from typing import Callable
 
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
@@ -100,8 +101,14 @@ class PokemonCenterAdapter:
         self.min_delay_s = min_delay_s
         self.max_delay_s = max_delay_s
 
-    def crawl(self, db: Session) -> list[RawDeal]:
-        deals: list[RawDeal] = []
+    def crawl(self, db: Session, on_deal: Callable[[RawDeal], None]) -> int:
+        """Calls on_deal(raw) immediately for each drop as it's found,
+        rather than collecting a list to hand back after the whole crawl
+        finishes — see argos.py's crawl() docstring for why (confirmed live
+        2026-07-21: an interrupted crawl silently lost 32 real items this
+        way). Returns the count of drops found, for the caller's own
+        logging."""
+        count = 0
         for category_url in self.category_urls:
             self._delay()
             result = scraperapi.fetch(category_url, self.api_key)
@@ -113,32 +120,36 @@ class PokemonCenterAdapter:
             if not products:
                 print(f"[POKEMON_CENTER] {category_url}: no products parsed (page structure changed?)")
             for product in products:
-                deal = self._process_product(db, product)
-                if deal:
-                    deals.append(deal)
-        return deals
+                if self._process_product(db, product, on_deal):
+                    count += 1
+        return count
 
-    def _process_product(self, db: Session, product: _ListingProduct) -> RawDeal | None:
-        is_drop = stock_state.diff_and_record(db, "pokemon_center", product.url, product.in_stock)
+    def _process_product(self, db: Session, product: _ListingProduct, on_deal: Callable[[RawDeal], None]) -> bool:
+        is_drop = stock_state.check(db, "pokemon_center", product.url, product.in_stock)
         if not is_drop:
-            return None
+            stock_state.record(db, "pokemon_center", product.url, product.in_stock)
+            return False
 
         self._delay()
         result = scraperapi.fetch(product.url, self.api_key)
         if result is None or result[0] != 200:
             print(f"[POKEMON_CENTER] {product.url}: product page fetch failed, using listing data only")
-            return RawDeal(
+            raw = RawDeal(
                 source="pokemon_center", retailer="Pokemon Center", title=product.title,
                 url=product.url, buy_price_pence=product.price_pence or 0,
                 image_url=None, html="<html></html>",
             )
+        else:
+            price_pence, image_url = _product_page_details(result[1])
+            raw = RawDeal(
+                source="pokemon_center", retailer="Pokemon Center", title=product.title,
+                url=product.url, buy_price_pence=price_pence or product.price_pence or 0,
+                image_url=image_url, html=result[1],
+            )
 
-        price_pence, image_url = _product_page_details(result[1])
-        return RawDeal(
-            source="pokemon_center", retailer="Pokemon Center", title=product.title,
-            url=product.url, buy_price_pence=price_pence or product.price_pence or 0,
-            image_url=image_url, html=result[1],
-        )
+        on_deal(raw)
+        stock_state.record(db, "pokemon_center", product.url, product.in_stock)   # only mark "seen" once on_deal has run
+        return True
 
     def _delay(self) -> None:
         time.sleep(random.uniform(self.min_delay_s, self.max_delay_s))

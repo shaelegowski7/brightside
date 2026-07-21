@@ -59,15 +59,17 @@ def poll_argos_clearance() -> None:
     )
 
     db = SessionLocal()
+
+    def _on_deal(raw) -> None:
+        try:
+            pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
+        except Exception as e:
+            db.rollback()
+            print(f"[SCHEDULER] {raw.url}: processing error: {e}")
+
     try:
-        raw_deals = adapter.crawl(db)
-        print(f"[SCHEDULER] argos: {len(raw_deals)} new/changed item(s)")
-        for raw in raw_deals:
-            try:
-                pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
-            except Exception as e:
-                db.rollback()
-                print(f"[SCHEDULER] {raw.url}: processing error: {e}")
+        count = adapter.crawl(db, on_deal=_on_deal)
+        print(f"[SCHEDULER] argos: {count} new/changed item(s)")
     finally:
         db.close()
 
@@ -85,15 +87,17 @@ def poll_pokemon_center() -> None:
     )
 
     db = SessionLocal()
+
+    def _on_deal(raw) -> None:
+        try:
+            pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
+        except Exception as e:
+            db.rollback()
+            print(f"[SCHEDULER] {raw.url}: processing error: {e}")
+
     try:
-        raw_deals = adapter.crawl(db)
-        print(f"[SCHEDULER] pokemon_center: {len(raw_deals)} drop(s)")
-        for raw in raw_deals:
-            try:
-                pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
-            except Exception as e:
-                db.rollback()
-                print(f"[SCHEDULER] {raw.url}: processing error: {e}")
+        count = adapter.crawl(db, on_deal=_on_deal)
+        print(f"[SCHEDULER] pokemon_center: {count} drop(s)")
     finally:
         db.close()
 
