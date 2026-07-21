@@ -12,6 +12,17 @@ since no live API key was available at build time. Two fields carry
 residual uncertainty and are flagged inline: categoryTree[0] as "the"
 category, and stats.buyBoxIsAmazon as the Amazon-on-listing signal. Verify
 both against a real product on first live run.
+
+fbaFees.pickAndPackFee confirmed live 2026-07-21 against a real matched
+product (B00HER8E5A, DEWALT multi-tool): {"lastUpdate": ..., "pickAndPackFee":
+330} — pence, same convention as every other Keepa money field here. This is
+Keepa's own fee computed from the catalog's actual package weight/dims
+against Amazon's published FBA rate card — meaningfully more trustworthy
+than the config-table flat size-tier guess in pricing/fees.py, and it's part
+of the base product payload (not gated behind `offers`), so it's effectively
+free. Used to avoid the SP-API getMyFeesEstimate cost/eligibility bar
+(Pro-seller developer registration + ongoing fee) for this one component;
+referral fee and gating still aren't SP-API-backed — see pricing/fees.py.
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -77,6 +88,12 @@ def _category_name(product: dict) -> str | None:
     return tree[0]["name"] if tree else None
 
 
+def _fba_fulfilment_fee_pence(product: dict) -> int | None:
+    fba_fees = product.get("fbaFees") or {}
+    fee = fba_fees.get("pickAndPackFee")
+    return fee if fee is not None and fee >= 0 else None
+
+
 def _rank_history_days(product: dict) -> int | None:
     tracking_since = product.get("trackingSince")
     if not isinstance(tracking_since, datetime):
@@ -112,6 +129,7 @@ class Stage2Result:
     package_weight_kg: float | None
     package_longest_cm: float | None
     package_dims_sum_cm: float | None
+    fba_fulfilment_fee_pence: int | None   # Keepa's own fee for this ASIN's real dims/weight; None if unavailable
 
 
 def stage1_screen(db: Session, codes: list[str], is_ean: bool) -> dict[str, Stage1Result]:
@@ -229,5 +247,6 @@ def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
             package_weight_kg=(weight_g / 1000) if weight_g else None,
             package_longest_cm=(max(dims_mm) / 10) if dims_mm else None,
             package_dims_sum_cm=(sum(dims_mm) / 10) if dims_mm else None,
+            fba_fulfilment_fee_pence=_fba_fulfilment_fee_pence(product),
         )
     return results

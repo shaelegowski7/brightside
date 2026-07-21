@@ -1,7 +1,16 @@
-"""Fee sourcing seam. Phase 1 only has FeeTableProvider (config-driven
-estimate — every result comes back with `estimated=True`). Phase 2 adds an
-SPAPIFeeProvider backed by SP-API's getMyFeesEstimate, implementing the same
-FeeProvider interface, for exact fees — not implemented here."""
+"""Fee sourcing seam. FeeTableProvider is config-driven (referral % by
+category, FBA fee by size tier) — the fallback whenever a real per-ASIN
+fulfilment fee isn't available. SP-API's getMyFeesEstimate/gating were
+dropped as a Phase 2 target (Pro-seller developer registration + ongoing
+cost, for a seller account that doesn't have one); instead, get_fees()
+accepts an optional keepa_fulfilment_fee_pence (Keepa's own fbaFees.
+pickAndPackFee, computed from the catalog's real weight/dims against
+Amazon's published rate card — see keepa_client.py) and uses it in place of
+the flat size-tier guess when present, marking the result estimated=False.
+Referral fee stays config-table-sourced either way (it's just price x a
+published category percentage — no API needed for that part to be exact,
+only for it to be categorised correctly). Gating remains unchecked; buyers
+verify manually in Seller Central before purchasing."""
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -19,7 +28,10 @@ class SizeDims:
 
 class FeeProvider(ABC):
     @abstractmethod
-    def get_fees(self, category: str, sell_price_pence: int, dims: SizeDims | None) -> FeeInput:
+    def get_fees(
+        self, category: str, sell_price_pence: int, dims: SizeDims | None,
+        keepa_fulfilment_fee_pence: int | None = None,
+    ) -> FeeInput:
         ...
 
     @abstractmethod
@@ -53,13 +65,22 @@ class FeeTableProvider(FeeProvider):
                 return tier
         return "oversize"
 
-    def get_fees(self, category: str, sell_price_pence: int, dims: SizeDims | None) -> FeeInput:
+    def get_fees(
+        self, category: str, sell_price_pence: int, dims: SizeDims | None,
+        keepa_fulfilment_fee_pence: int | None = None,
+    ) -> FeeInput:
         referral_pct = self._category_referral_pct.get(category, self._default_referral_pct)
         tier = self.classify_size_tier(dims)
         storage_key = "oversize" if tier == "oversize" else "standard"
+        if keepa_fulfilment_fee_pence is not None:
+            fulfilment_fee_pence = keepa_fulfilment_fee_pence
+            estimated = False
+        else:
+            fulfilment_fee_pence = self._fba_fee_by_tier[tier]
+            estimated = True
         return FeeInput(
             referral_fee_pence=round(sell_price_pence * referral_pct),
-            fba_fulfilment_fee_pence=self._fba_fee_by_tier[tier],
+            fba_fulfilment_fee_pence=fulfilment_fee_pence,
             monthly_storage_fee_pence=self._storage_fee_by_tier[storage_key],
-            estimated=True,
+            estimated=estimated,
         )

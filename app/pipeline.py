@@ -209,7 +209,7 @@ def _score_and_record(
     if stage2.package_weight_kg and stage2.package_longest_cm and stage2.package_dims_sum_cm:
         dims = SizeDims(stage2.package_weight_kg, stage2.package_longest_cm, stage2.package_dims_sum_cm)
     price_for_fees = stage2.buybox_price_pence or stage2.lowest_fba_offer_pence or 0
-    fees = fee_provider.get_fees(stage2.category or "", price_for_fees, dims)
+    fees = fee_provider.get_fees(stage2.category or "", price_for_fees, dims, stage2.fba_fulfilment_fee_pence)
     oversize = fee_provider.classify_size_tier(dims) == "oversize"
 
     score_input = ScoreInput(

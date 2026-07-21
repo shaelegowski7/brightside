@@ -1,6 +1,8 @@
 """End-to-end pipeline wiring, with resolver/Keepa/Discord calls mocked out
 (no network) but everything else — dedupe, matching, decision engine, DB
 writes, cooldown — running for real against the sqlite test DB."""
+import pytest
+
 from app import keepa_client, models, pipeline, resolver
 from app.decision.engine import DecisionConfig
 from app.pricing.fees import FeeTableProvider
@@ -59,6 +61,7 @@ def test_amazon_url_match_full_pass_pings_and_records(db_session, monkeypatch):
             fba_offer_count=2, lowest_fba_offer_pence=None, est_monthly_sales=60,
             buybox_avg_90d_pence=2400, rank_history_days=200, hazmat=False,
             package_weight_kg=None, package_longest_cm=None, package_dims_sum_cm=None,
+            fba_fulfilment_fee_pence=None,
         )
     })
 
@@ -117,6 +120,54 @@ def test_no_match_found_pings_unverified_without_keepa_call(db_session, monkeypa
     assert deal.product_id is None
     assert len(sent_embeds) == 1
     assert "UNVERIFIED MATCH" in sent_embeds[0]["title"]
+
+
+def test_keepa_fulfilment_fee_yields_clean_pass_not_estimated(db_session, monkeypatch):
+    """When Keepa supplies a real fbaFees.pickAndPackFee, pipeline must pass
+    it through to fee_provider.get_fees() and the resulting score must drop
+    the estimated_fees soft flag (only the config-table fallback counts as
+    "estimated" — see pricing/fees.py)."""
+    raw = RawDeal(
+        source="hotukdeals", retailer="Amazon", title="Widget Deal",
+        url="https://www.hotukdeals.com/deals/widget-deal-9999999",
+        buy_price_pence=1000, image_url=None,
+    )
+    monkeypatch.setattr(resolver, "resolve", lambda url: resolver.ResolvedDeal(
+        final_url="https://www.amazon.co.uk/dp/B000WIDGT2?tag=x", html="<html></html>",
+        status_code=200, blocked=False,
+    ))
+    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean: {
+        "B000WIDGT2": keepa_client.Stage1Result(
+            asin="B000WIDGT2", title="Widget", category="Toys & Games",
+            sales_rank=20000, est_sell_price_pence=2400, rank_history_days=200,
+        )
+    })
+    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins: {
+        "B000WIDGT2": keepa_client.Stage2Result(
+            asin="B000WIDGT2", title="Widget", category="Toys & Games",
+            sales_rank=20000, buybox_price_pence=2500, amazon_on_listing=False,
+            fba_offer_count=2, lowest_fba_offer_pence=None, est_monthly_sales=60,
+            buybox_avg_90d_pence=2400, rank_history_days=200, hazmat=False,
+            package_weight_kg=None, package_longest_cm=None, package_dims_sum_cm=None,
+            fba_fulfilment_fee_pence=280,
+        )
+    })
+
+    import app.discord_notifier as dn
+    monkeypatch.setattr(dn, "send_ping", lambda webhook_url, embed: True)
+
+    pipeline.process_deal(db_session, raw, _decision_cfg(), _fee_provider(), _APP_CFG)
+
+    deal = db_session.query(models.Deal).filter(models.Deal.url == raw.url).first()
+    score = db_session.query(models.Score).filter(models.Score.deal_id == deal.id).first()
+    assert score.verdict == "PASS"
+    assert score.flags_json == []
+    assert score.fees_json["fba_fulfilment_fee_pence"] == 280
+    assert score.fees_json["estimated"] is False
+    # total_fees = (375+280)*1.20 = 786; storage = 27*1;
+    # net_profit = 2500 - 786 - 27 - 40 - 1000(buy_price) = 647
+    assert score.net_profit == 647
+    assert score.roi == pytest.approx(0.647)
 
 
 def test_scraper_deal_with_html_skips_resolver(db_session, monkeypatch):
