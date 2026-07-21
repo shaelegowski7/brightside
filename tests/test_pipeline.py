@@ -44,7 +44,7 @@ def test_amazon_url_match_full_pass_pings_and_records(db_session, monkeypatch):
         url="https://www.hotukdeals.com/deals/widget-deal-4938754",
         buy_price_pence=1000, image_url=None,
     )
-    monkeypatch.setattr(resolver, "resolve", lambda url: resolver.ResolvedDeal(
+    monkeypatch.setattr(resolver, "resolve", lambda url, key="": resolver.ResolvedDeal(
         final_url="https://www.amazon.co.uk/dp/B000WIDGT1?tag=x", html="<html></html>",
         status_code=200, blocked=False,
     ))
@@ -100,7 +100,7 @@ def test_no_match_found_pings_unverified_without_keepa_call(db_session, monkeypa
         url="https://www.hotukdeals.com/deals/mystery-deal-1111111",
         buy_price_pence=500, image_url=None,
     )
-    monkeypatch.setattr(resolver, "resolve", lambda url: resolver.ResolvedDeal(
+    monkeypatch.setattr(resolver, "resolve", lambda url, key="": resolver.ResolvedDeal(
         final_url="https://www.joybuy.co.uk/dp/x", html="<html><body>no structured data</body></html>",
         status_code=200, blocked=False,
     ))
@@ -131,7 +131,7 @@ def test_title_search_fallback_matches_via_model_number(db_session, monkeypatch)
         url="https://www.hotukdeals.com/deals/forge-steel-drill-5555555",
         buy_price_pence=1200, image_url=None,
     )
-    monkeypatch.setattr(resolver, "resolve", lambda url: resolver.ResolvedDeal(
+    monkeypatch.setattr(resolver, "resolve", lambda url, key="": resolver.ResolvedDeal(
         final_url="https://www.screwfix.com/p/forge-steel-drill", html="<html><body>no structured data</body></html>",
         status_code=200, blocked=False,
     ))
@@ -179,7 +179,7 @@ def test_title_search_result_is_cached_across_deals(db_session, monkeypatch):
             source="hotukdeals", retailer="Screwfix", title="Forge Steel Drill AF300UK Deal",
             url=url, buy_price_pence=1200, image_url=None,
         )
-    monkeypatch.setattr(resolver, "resolve", lambda url: resolver.ResolvedDeal(
+    monkeypatch.setattr(resolver, "resolve", lambda url, key="": resolver.ResolvedDeal(
         final_url=f"https://www.screwfix.com/p/{url[-7:]}", html="<html><body>no structured data</body></html>",
         status_code=200, blocked=False,
     ))
@@ -214,7 +214,7 @@ def test_keepa_fulfilment_fee_yields_clean_pass_not_estimated(db_session, monkey
         url="https://www.hotukdeals.com/deals/widget-deal-9999999",
         buy_price_pence=1000, image_url=None,
     )
-    monkeypatch.setattr(resolver, "resolve", lambda url: resolver.ResolvedDeal(
+    monkeypatch.setattr(resolver, "resolve", lambda url, key="": resolver.ResolvedDeal(
         final_url="https://www.amazon.co.uk/dp/B000WIDGT2?tag=x", html="<html></html>",
         status_code=200, blocked=False,
     ))
@@ -314,7 +314,7 @@ def test_same_price_resurface_is_skipped(db_session, monkeypatch):
     )
     call_count = {"n": 0}
 
-    def _resolve(url):
+    def _resolve(url, key=""):
         call_count["n"] += 1
         return resolver.ResolvedDeal(final_url="https://www.amazon.co.uk/dp/B000REPEAT?x", html="<html></html>", status_code=200, blocked=False)
     monkeypatch.setattr(resolver, "resolve", _resolve)

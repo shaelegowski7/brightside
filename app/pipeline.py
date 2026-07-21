@@ -19,8 +19,13 @@ from .sources.base import RawDeal
 # suppressed by cooldown, etc.) is a stable outcome at that price — retrying
 # would just waste Keepa tokens for the same answer. fetch_blocked is
 # retriable because a Cloudflare/bot block is transient infra, not a
-# judgement about the deal.
-_RETRIABLE_STATUSES = {"new", "resolved", "fetch_blocked"}
+# judgement about the deal. "matched" is retriable too: it means we found a
+# product but haven't scored it yet (no Score row exists) -- if the process
+# gets interrupted between setting this status and the stage1/stage2 calls
+# (confirmed live 2026-07-21: 16 real deals got stuck here permanently,
+# same failure class as the crawl-interruption bug), the deal must not be
+# treated as a stable outcome.
+_RETRIABLE_STATUSES = {"new", "resolved", "matched", "fetch_blocked"}
 
 # Sources whose own upstream diff mechanism already gates whether
 # process_deal() gets called at all, so a same-price resurface here is
@@ -42,7 +47,7 @@ def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_pr
         # and raw.html is already fetched — no HUKD redirect to follow.
         resolved = resolver.ResolvedDeal(final_url=raw.url, html=raw.html, status_code=200, blocked=False)
     else:
-        resolved = resolver.resolve(raw.url)
+        resolved = resolver.resolve(raw.url, get_settings().scraperapi_key)
         if resolved is None:
             deal.status = "unresolvable"
             db.commit()
