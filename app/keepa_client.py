@@ -166,6 +166,26 @@ def stage1_screen(db: Session, codes: list[str], is_ean: bool) -> dict[str, Stag
     return results
 
 
+def search_by_term(db: Session, term: str) -> Stage1Result | None:
+    """Model-number/title fallback (spec priority #2, matching/model_number.py
+    extracts `term`) — Keepa's product_finder, confirmed live 2026-07-21
+    (keepa==1.5.0's Keepa.product_finder({"title": term}, domain=...) returns
+    list[str] of ASINs ranked by relevance; a real search for a known
+    product's exact title put the correct ASIN first). Spec: "search/finder
+    requests cost more tokens than a plain product lookup (~10)" — this
+    makes two Keepa calls (product_finder then a stage1_screen by the
+    resulting ASIN), so it's meaningfully pricier than the EAN/ASIN paths.
+    Only the top match is used; caller is responsible for the 7-day
+    negative-result cache (see matching/title_search_cache.py)."""
+    client = _get_client()
+    tokens_before = client.tokens_left
+    asins = client.product_finder({"title": term}, domain=KEEPA_DOMAIN, wait=True, n_products=1)
+    _log_tokens(db, "title_search", 1, tokens_before, client.tokens_left)
+    if not asins:
+        return None
+    return stage1_screen(db, [asins[0]], is_ean=False).get(asins[0])
+
+
 def stage1_screen_passes(result: Stage1Result, buy_price_pence: int, cfg: DecisionConfig, fees: FeeProvider) -> tuple[bool, str | None]:
     """Cheap kill-switch on optimistic assumptions — category blocklist,
     rank threshold, and a rough ROI check assuming best-case offer

@@ -125,6 +125,23 @@ class StockState(Base):
     last_seen = Column(DateTime(timezone=True), default=utcnow)
 
 
+class TitleSearchCache(Base):
+    """Negative+positive cache for the model-number/title Keepa search
+    fallback (spec priority #2) — keyed on the extracted model-number term
+    (see app/matching/model_number.py), not the raw deal title, so two
+    different HUKD posts mentioning the same code share one cache entry.
+    asin=None means "searched, found nothing usable"; per spec, don't
+    re-search the same failed term within 7 days (see
+    app/matching/title_search_cache.py). A found asin has no expiry —
+    matches don't go stale the way "not found yet" does."""
+
+    __tablename__ = "title_search_cache"
+
+    search_term = Column(String, primary_key=True)
+    asin = Column(String, nullable=True)
+    searched_at = Column(DateTime(timezone=True), default=utcnow)
+
+
 class TokenLog(Base):
     """One row per Keepa API call. Kept indefinitely for the first two weeks
     per the spec to validate the token-budget estimates; cheap enough to
@@ -134,7 +151,7 @@ class TokenLog(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     ts = Column(DateTime(timezone=True), default=utcnow)
-    stage = Column(String, nullable=False)   # 'stage1_screen' | 'stage2_full'
+    stage = Column(String, nullable=False)   # 'stage1_screen' | 'stage2_full' | 'title_search'
     item_count = Column(Integer, nullable=False)   # ASINs/codes in the batch
     tokens_before = Column(Integer, nullable=True)
     tokens_after = Column(Integer, nullable=True)

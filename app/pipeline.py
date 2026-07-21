@@ -1,16 +1,16 @@
 """Orchestrates one deal end-to-end: dedupe against `deals`, resolve the
-HUKD redirect, match to an ASIN (Amazon-URL shortcut -> JSON-LD -> give up),
-run the two-stage Keepa lookup + decision engine, and ping Discord subject
-to the ASIN cooldown. Shared by the scheduler's RSS poll job today; the
-Phase 2 /scan endpoint reuses the same process_deal() for its synchronous
-scan-and-verdict flow.
+HUKD redirect, match to an ASIN (Amazon-URL shortcut -> JSON-LD -> model-
+number/title Keepa search -> give up), run the two-stage Keepa lookup +
+decision engine, and ping Discord subject to the ASIN cooldown. Shared by
+the scheduler's RSS poll job today; the Phase 2 /scan endpoint reuses the
+same process_deal() for its synchronous scan-and-verdict flow.
 """
 from sqlalchemy.orm import Session
 
 from . import discord_notifier, keepa_client, models, resolver
 from .config import get_settings
 from .decision.engine import DecisionConfig, ScoreInput, Verdict, score_deal
-from .matching import amazon_url, cache, jsonld
+from .matching import amazon_url, cache, jsonld, model_number, title_search_cache
 from .pricing.fees import FeeProvider, SizeDims
 from .sources.base import RawDeal
 
@@ -66,6 +66,12 @@ def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_pr
         ean = jsonld.extract_ean(resolved.final_url, resolved.html or "")
         matched_via, confidence = ("jsonld", "high") if ean else (None, None)
 
+    stage1_from_search = None
+    if not asin and not ean:
+        asin, stage1_from_search = _try_title_search(db, deal.title)
+        if asin:
+            matched_via, confidence = "title_search", "low"
+
     if not asin and not ean:
         deal.status = "no_ean_match"
         db.commit()
@@ -73,6 +79,8 @@ def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_pr
         return
 
     product, stage1 = _resolve_product(db, ean=ean, asin=asin, title=deal.title, matched_via=matched_via, confidence=confidence)
+    if stage1 is None:
+        stage1 = stage1_from_search
     if product.asin is None:
         deal.status = "no_ean_match"
         db.commit()
@@ -171,6 +179,27 @@ def _upsert_deal(db: Session, raw: RawDeal) -> models.Deal | None:
     existing.status = "new"
     db.commit()
     return existing
+
+
+def _try_title_search(db: Session, title: str) -> tuple[str | None, "keepa_client.Stage1Result | None"]:
+    """Spec priority #2, only reached after structured EAN/ASIN extraction
+    (priority #1) has already failed. Deliberately does not search using
+    the raw (often noisy, multi-item) deal title itself -- only a specific
+    extracted model-number-like code (see matching/model_number.py) -- to
+    avoid garbage matches on generic multi-item HUKD posts. Caches both
+    hits and misses so the same failed term isn't re-searched within its
+    7-day window (matching/title_search_cache.py)."""
+    term = model_number.extract_model_number(title)
+    if term is None:
+        return None, None
+
+    cache_hit, cached_asin = title_search_cache.get_cached(db, term)
+    if cache_hit:
+        return (cached_asin, None) if cached_asin else (None, None)
+
+    result = keepa_client.search_by_term(db, term)
+    title_search_cache.record(db, term, result.asin if result else None)
+    return (result.asin, result) if result else (None, None)
 
 
 def _resolve_product(

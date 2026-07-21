@@ -122,6 +122,88 @@ def test_no_match_found_pings_unverified_without_keepa_call(db_session, monkeypa
     assert "UNVERIFIED MATCH" in sent_embeds[0]["title"]
 
 
+def test_title_search_fallback_matches_via_model_number(db_session, monkeypatch):
+    """No amazon_url, no JSON-LD EAN, but a model-number-shaped code in the
+    title -> spec priority #2 kicks in: extract the code, search Keepa,
+    match at confidence='low'."""
+    raw = RawDeal(
+        source="hotukdeals", retailer="Screwfix", title="Forge Steel Drill AF300UK Deal",
+        url="https://www.hotukdeals.com/deals/forge-steel-drill-5555555",
+        buy_price_pence=1200, image_url=None,
+    )
+    monkeypatch.setattr(resolver, "resolve", lambda url: resolver.ResolvedDeal(
+        final_url="https://www.screwfix.com/p/forge-steel-drill", html="<html><body>no structured data</body></html>",
+        status_code=200, blocked=False,
+    ))
+
+    search_calls = []
+
+    def fake_search_by_term(db, term):
+        search_calls.append(term)
+        return keepa_client.Stage1Result(
+            asin="B000SEARCH1", title="Forge Steel Drill", category="Tools & Home Improvement",
+            sales_rank=5000, est_sell_price_pence=3000, rank_history_days=200,
+        )
+    monkeypatch.setattr(keepa_client, "search_by_term", fake_search_by_term)
+    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins: {
+        "B000SEARCH1": keepa_client.Stage2Result(
+            asin="B000SEARCH1", title="Forge Steel Drill", category="Tools & Home Improvement",
+            sales_rank=5000, buybox_price_pence=3000, amazon_on_listing=False,
+            fba_offer_count=1, lowest_fba_offer_pence=None, est_monthly_sales=40,
+            buybox_avg_90d_pence=2900, rank_history_days=200, hazmat=False,
+            package_weight_kg=None, package_longest_cm=None, package_dims_sum_cm=None,
+            fba_fulfilment_fee_pence=None,
+        )
+    })
+
+    import app.discord_notifier as dn
+    monkeypatch.setattr(dn, "send_ping", lambda webhook_url, embed: True)
+
+    pipeline.process_deal(db_session, raw, _decision_cfg(), _fee_provider(), _APP_CFG)
+
+    assert search_calls == ["AF300UK"]
+    deal = db_session.query(models.Deal).filter(models.Deal.url == raw.url).first()
+    product = db_session.get(models.Product, deal.product_id)
+    assert product.asin == "B000SEARCH1"
+    assert product.matched_via == "title_search"
+    assert product.confidence == "low"
+    score = db_session.query(models.Score).filter(models.Score.deal_id == deal.id).first()
+    assert "low_confidence" in score.flags_json
+
+
+def test_title_search_result_is_cached_across_deals(db_session, monkeypatch):
+    """Two different HUKD posts mentioning the same code must only hit
+    Keepa's product-finder once -- the second reuses the cache."""
+    def _raw(url):
+        return RawDeal(
+            source="hotukdeals", retailer="Screwfix", title="Forge Steel Drill AF300UK Deal",
+            url=url, buy_price_pence=1200, image_url=None,
+        )
+    monkeypatch.setattr(resolver, "resolve", lambda url: resolver.ResolvedDeal(
+        final_url=f"https://www.screwfix.com/p/{url[-7:]}", html="<html><body>no structured data</body></html>",
+        status_code=200, blocked=False,
+    ))
+
+    search_calls = []
+
+    def fake_search_by_term(db, term):
+        search_calls.append(term)
+        return keepa_client.Stage1Result(
+            asin="B000SEARCH2", title="Forge Steel Drill", category="Tools & Home Improvement",
+            sales_rank=200000, est_sell_price_pence=None, rank_history_days=None,
+        )
+    monkeypatch.setattr(keepa_client, "search_by_term", fake_search_by_term)
+    # Second deal's cache-hit path has no stage1 data attached (see
+    # pipeline._try_title_search), so process_deal falls back to a plain
+    # stage1_screen lookup -- stub it rather than hitting real Keepa.
+    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean: {})
+
+    pipeline.process_deal(db_session, _raw("https://www.hotukdeals.com/deals/drill-a-1111111"), _decision_cfg(), _fee_provider(), _APP_CFG)
+    pipeline.process_deal(db_session, _raw("https://www.hotukdeals.com/deals/drill-b-2222222"), _decision_cfg(), _fee_provider(), _APP_CFG)
+
+    assert search_calls == ["AF300UK"]   # second deal reused the cache, no second Keepa search
+
+
 def test_keepa_fulfilment_fee_yields_clean_pass_not_estimated(db_session, monkeypatch):
     """When Keepa supplies a real fbaFees.pickAndPackFee, pipeline must pass
     it through to fee_provider.get_fees() and the resulting score must drop
