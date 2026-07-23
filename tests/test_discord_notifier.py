@@ -72,9 +72,12 @@ def test_build_matched_embed_pass_with_flags_is_amber():
 
 
 def test_build_unverified_embed_flags_check_manually():
+    """Only used for pipeline.py's _UNMATCHABLE_BY_DESIGN_SOURCES (currently
+    pokemon_center) -- see that module for why this source still needs a
+    ping despite zero match confidence."""
     embed = build_unverified_embed(
-        title="Mystery Item", retailer_url="https://retailer.example/y",
-        image_url=None, retailer="Joybuy", buy_price_pence=950,
+        title="Elite Trainer Box", retailer_url="https://www.pokemoncenter.com/en-gb/product/1/etb",
+        image_url=None, retailer="Pokemon Center", buy_price_pence=5699,
     )
     assert "UNVERIFIED MATCH — check manually" in embed["title"]
     assert embed["color"] == 0xF1C40F

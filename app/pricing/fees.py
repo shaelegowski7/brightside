@@ -1,16 +1,17 @@
 """Fee sourcing seam. FeeTableProvider is config-driven (referral % by
-category, FBA fee by size tier) — the fallback whenever a real per-ASIN
-fulfilment fee isn't available. SP-API's getMyFeesEstimate/gating were
-dropped as a Phase 2 target (Pro-seller developer registration + ongoing
-cost, for a seller account that doesn't have one); instead, get_fees()
-accepts an optional keepa_fulfilment_fee_pence (Keepa's own fbaFees.
-pickAndPackFee, computed from the catalog's real weight/dims against
-Amazon's published rate card — see keepa_client.py) and uses it in place of
-the flat size-tier guess when present, marking the result estimated=False.
-Referral fee stays config-table-sourced either way (it's just price x a
-published category percentage — no API needed for that part to be exact,
-only for it to be categorised correctly). Gating remains unchecked; buyers
-verify manually in Seller Central before purchasing."""
+category, FBA fee by size tier) — the fallback whenever a real per-ASIN fee
+component isn't available. SP-API's getMyFeesEstimate/gating were dropped as
+a Phase 2 target (Pro-seller developer registration + ongoing cost, for a
+seller account that doesn't have one); instead, get_fees() accepts two
+optional per-ASIN Keepa values, each independently preferred over its
+config-table guess when present (estimated=True only if either still had to
+fall back): keepa_fulfilment_fee_pence (fbaFees.pickAndPackFee, computed from
+the catalog's real weight/dims against Amazon's published rate card) and
+keepa_referral_pct (referralFeePercentage — also sidesteps the config
+table's category-name string matching, which already drifts: see
+config.yaml's separate "Home & Kitchen"/"Kitchen & Home" entries). Both
+confirmed live 2026-07-23 — see keepa_client.py. Gating remains unchecked;
+buyers verify manually in Seller Central before purchasing."""
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -31,6 +32,7 @@ class FeeProvider(ABC):
     def get_fees(
         self, category: str, sell_price_pence: int, dims: SizeDims | None,
         keepa_fulfilment_fee_pence: int | None = None,
+        keepa_referral_pct: float | None = None,
     ) -> FeeInput:
         ...
 
@@ -68,19 +70,34 @@ class FeeTableProvider(FeeProvider):
     def get_fees(
         self, category: str, sell_price_pence: int, dims: SizeDims | None,
         keepa_fulfilment_fee_pence: int | None = None,
+        keepa_referral_pct: float | None = None,
     ) -> FeeInput:
-        referral_pct = self._category_referral_pct.get(category, self._default_referral_pct)
         tier = self.classify_size_tier(dims)
         storage_key = "oversize" if tier == "oversize" else "standard"
+
+        if keepa_referral_pct is not None:
+            # Keepa reports this in percentage points (13.0 == 13%), not a
+            # 0-1 fraction -- confirmed live 2026-07-23. Same "prefer the
+            # real per-ASIN Keepa value over the config-table category-name
+            # guess" pattern already used for the FBA fulfilment fee below;
+            # also sidesteps the config table's fragile category-name
+            # matching (e.g. "Home & Kitchen" vs "Kitchen & Home" drift).
+            referral_pct = keepa_referral_pct / 100
+            referral_estimated = False
+        else:
+            referral_pct = self._category_referral_pct.get(category, self._default_referral_pct)
+            referral_estimated = True
+
         if keepa_fulfilment_fee_pence is not None:
             fulfilment_fee_pence = keepa_fulfilment_fee_pence
-            estimated = False
+            fulfilment_estimated = False
         else:
             fulfilment_fee_pence = self._fba_fee_by_tier[tier]
-            estimated = True
+            fulfilment_estimated = True
+
         return FeeInput(
             referral_fee_pence=round(sell_price_pence * referral_pct),
             fba_fulfilment_fee_pence=fulfilment_fee_pence,
             monthly_storage_fee_pence=self._storage_fee_by_tier[storage_key],
-            estimated=estimated,
+            estimated=referral_estimated or fulfilment_estimated,
         )

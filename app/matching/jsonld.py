@@ -77,3 +77,66 @@ def extract_ean(url: str, html: str) -> str | None:
 
     soup = BeautifulSoup(html, "html.parser")
     return _extract_from_ld_json(soup) or _extract_from_microdata(soup)
+
+
+def _price_from_offers(offers) -> str | None:
+    if isinstance(offers, dict):
+        if "price" in offers:
+            return offers["price"]
+        spec = offers.get("priceSpecification")
+        if isinstance(spec, dict) and "price" in spec:
+            return spec["price"]
+        return None
+    if isinstance(offers, list):
+        for item in offers:
+            found = _price_from_offers(item)
+            if found is not None:
+                return found
+    return None
+
+
+def _search_ld_json_node_for_price(node) -> str | None:
+    if isinstance(node, dict):
+        if "offers" in node:
+            found = _price_from_offers(node["offers"])
+            if found is not None:
+                return found
+        for value in node.values():
+            found = _search_ld_json_node_for_price(value)
+            if found is not None:
+                return found
+    elif isinstance(node, list):
+        for item in node:
+            found = _search_ld_json_node_for_price(item)
+            if found is not None:
+                return found
+    return None
+
+
+def _clean_price_pence(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        return round(float(str(value).replace(",", "")) * 100)
+    except (TypeError, ValueError):
+        return None
+
+
+def extract_price_pence(html: str) -> int | None:
+    """Reads the retailer page's own listed price from Product JSON-LD's
+    `offers.price` (or `offers.priceSpecification.price`) — used as a
+    sanity check against the scraped/regex-parsed buy price (see
+    pipeline.py's price-sanity reject) to catch parse mis-fires like a
+    stray spec number being read as the price."""
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup.find_all("script", type="application/ld+json"):
+        if not tag.string:
+            continue
+        try:
+            data = json.loads(tag.string)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        pence = _clean_price_pence(_search_ld_json_node_for_price(data))
+        if pence is not None:
+            return pence
+    return None

@@ -52,8 +52,13 @@ class Deal(Base):
     buy_price = Column(Integer, nullable=False)   # pence
     first_seen = Column(DateTime(timezone=True), default=utcnow)
     last_seen = Column(DateTime(timezone=True), default=utcnow)
-    # 'new' -> 'resolved' -> 'matched'|'no_ean_match'|'fetch_blocked' ->
-    # 'stage1_rejected'|'stage2_scored' -> 'pinged'|'cooldown_suppressed'|'unverified_pinged'
+    # 'new' -> 'resolved' -> 'price_sanity_reject'|'matched'|'no_ean_match'|
+    # 'title_mismatch'|'fetch_blocked' -> 'stage1_rejected'|'stage2_scored' ->
+    # 'pinged'|'ping_failed'|'cooldown_suppressed'|'unverified_pinged'
+    # (no_ean_match/title_mismatch/price_sanity_reject are terminal and
+    # silent -- Fix Build Guide phase 2: don't post unverified/mismatched
+    # deals, just log. unverified_pinged is the one exception, reserved for
+    # pipeline.py's _UNMATCHABLE_BY_DESIGN_SOURCES, e.g. pokemon_center)
     status = Column(String, nullable=False, default="new", index=True)
 
 
@@ -140,6 +145,21 @@ class TitleSearchCache(Base):
     search_term = Column(String, primary_key=True)
     asin = Column(String, nullable=True)
     searched_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+class CategorySize(Base):
+    """Cached Keepa category productCount, keyed on catId -- category sizes
+    barely change, so this is a long-TTL cache (see keepa_client.
+    get_category_size) that makes each distinct leaf category an
+    effectively one-time Keepa cost for the velocity gate's rank-percentile
+    leg (see decision/engine.py)."""
+
+    __tablename__ = "category_size"
+
+    cat_id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=True)
+    product_count = Column(Integer, nullable=False)
+    fetched_at = Column(DateTime(timezone=True), default=utcnow)
 
 
 class TokenLog(Base):

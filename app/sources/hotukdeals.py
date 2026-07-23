@@ -14,6 +14,16 @@ _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
+# HUKD titles carry a leading "heat" indicator, e.g. "111° - Halfords 24 LED
+# Tent Light" (confirmed live 2026-07-23 against the real /rss/trending
+# feed — it's a degree symbol, not the zero-width character an earlier read
+# of a mangled terminal dump suggested). Display/model-number-regex noise
+# only — strip it rather than let it leak into Discord embeds.
+_LEADING_ARTIFACT_RE = re.compile(r"^\d+°?\s*-\s*")
+
+
+def _clean_title(title: str) -> str:
+    return _LEADING_ARTIFACT_RE.sub("", title).strip()
 
 
 def _parse_price_pence(entry) -> int | None:
@@ -47,7 +57,7 @@ class HotUKDealsAdapter(SourceAdapter):
         for entry in parsed.entries:
             price_pence = _parse_price_pence(entry)
             link = entry.get("link")
-            title = entry.get("title", "").strip()
+            title = _clean_title(entry.get("title", "").strip())
             if price_pence is None or not link:
                 print(f"[HUKD] skipping (missing price or link): {title!r}")
                 continue

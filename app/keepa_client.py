@@ -25,13 +25,13 @@ free. Used to avoid the SP-API getMyFeesEstimate cost/eligibility bar
 referral fee and gating still aren't SP-API-backed — see pricing/fees.py.
 """
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import keepa
 from sqlalchemy.orm import Session
 
 from . import models
-from .config import get_settings
+from .config import get_config, get_settings
 from .decision.engine import DecisionConfig
 from .pricing.fees import FeeProvider
 
@@ -102,6 +102,57 @@ def _rank_history_days(product: dict) -> int | None:
     return max((datetime.now(timezone.utc) - since).days, 0)
 
 
+def _referral_fee_percentage(product: dict) -> float | None:
+    # Percentage points (e.g. 13.0 == 13%), NOT a 0-1 fraction — confirmed
+    # live 2026-07-23 against B00HER8E5A (referralFeePercentage: 13.0).
+    pct = product.get("referralFeePercentage")
+    return float(pct) if pct is not None and pct >= 0 else None
+
+
+def _latest_valid_rank(history: list) -> int | None:
+    """`history` is Keepa's flat [timestamp, rank, timestamp, rank, ...]
+    array for one category's rank-over-time (product['salesRanks'][catId]).
+    Returns the most recent non-negative rank."""
+    pairs = list(zip(history[0::2], history[1::2]))
+    for _, rank in reversed(pairs):
+        if rank is not None and rank >= 0:
+            return int(rank)
+    return None
+
+
+def _leaf_category(product: dict) -> tuple[int | None, int | None]:
+    """Returns (leaf_cat_id, leaf_rank) for the velocity gate's rank-
+    percentile leg (see decision/engine.py). `categoryTree[0]` (root) is
+    what the rest of this module uses for the coarse rank-threshold filter
+    and referral-fee bucket, but it's far too coarse a denominator for a
+    genuine "top N% of category" claim -- confirmed live 2026-07-23:
+    category_lookup on a root catId returned productCount 22.3M (top 2% ==
+    rank <=~446,900, looser than even the existing default_rank_threshold),
+    vs 4,861 for the product's actual leaf category ("Oscillating Tools").
+
+    `product['salesRanks']` carries rank history keyed by catId for
+    multiple category levels (not just root, and not always exactly the
+    categoryTree entries either -- some keys there aren't in categoryTree at
+    all, likely cross-listed categories). Walking categoryTree deepest-first
+    and taking the first catId that's also a salesRanks key reliably picks
+    the true leaf without pulling in those unrelated cross-listings."""
+    tree = product.get("categoryTree") or []
+    sales_ranks = product.get("salesRanks") or {}
+    if not tree or not sales_ranks:
+        return None, None
+    for entry in reversed(tree):
+        cat_id = entry.get("catId") if isinstance(entry, dict) else None
+        if cat_id is None:
+            continue
+        history = sales_ranks.get(str(cat_id))
+        if not history:
+            continue
+        rank = _latest_valid_rank(history)
+        if rank is not None:
+            return cat_id, rank
+    return None, None
+
+
 @dataclass
 class Stage1Result:
     asin: str
@@ -130,6 +181,9 @@ class Stage2Result:
     package_longest_cm: float | None
     package_dims_sum_cm: float | None
     fba_fulfilment_fee_pence: int | None   # Keepa's own fee for this ASIN's real dims/weight; None if unavailable
+    referral_fee_percentage: float | None   # Keepa's own referral %, percentage points (13.0 == 13%); None if unavailable
+    leaf_category_id: int | None   # deepest categoryTree catId with its own salesRanks entry -- see _leaf_category
+    leaf_category_rank: int | None   # most recent rank within leaf_category_id, for the velocity gate's percentile leg
 
 
 def stage1_screen(db: Session, codes: list[str], is_ean: bool) -> dict[str, Stage1Result]:
@@ -250,6 +304,7 @@ def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
 
         weight_g = product.get("packageWeight")
         dims_mm = [d for d in (product.get(k) for k in ("packageHeight", "packageLength", "packageWidth")) if d]
+        leaf_cat_id, leaf_rank = _leaf_category(product)
 
         results[asin] = Stage2Result(
             asin=asin,
@@ -268,5 +323,48 @@ def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
             package_longest_cm=(max(dims_mm) / 10) if dims_mm else None,
             package_dims_sum_cm=(sum(dims_mm) / 10) if dims_mm else None,
             fba_fulfilment_fee_pence=_fba_fulfilment_fee_pence(product),
+            referral_fee_percentage=_referral_fee_percentage(product),
+            leaf_category_id=leaf_cat_id,
+            leaf_category_rank=leaf_rank,
         )
     return results
+
+
+def get_category_size(db: Session, cat_id: int) -> int | None:
+    """Category productCount, cached with a long TTL (config `velocity.
+    category_size_cache_ttl_days`, default 30) -- category sizes barely
+    change, so after the first lookup this is effectively free for every
+    later deal in the same leaf category. Turns a raw sales_rank into a
+    genuine percentile for the velocity gate (see decision/engine.py).
+    Returns None (fails open to the gate's est_monthly_sales leg) if the
+    lookup fails and there's no usable cached value."""
+    ttl_days = get_config().get("velocity", {}).get("category_size_cache_ttl_days", 30)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=ttl_days)
+    cached = db.get(models.CategorySize, cat_id)
+    if cached is not None:
+        fetched_at = cached.fetched_at if cached.fetched_at.tzinfo else cached.fetched_at.replace(tzinfo=timezone.utc)
+        if fetched_at >= cutoff:
+            return cached.product_count
+
+    client = _get_client()
+    tokens_before = client.tokens_left
+    try:
+        categories = client.category_lookup(cat_id, domain=KEEPA_DOMAIN, wait=True)
+    except Exception as e:
+        print(f"[KEEPA] category_lookup({cat_id}) failed: {e}")
+        return cached.product_count if cached is not None else None
+    _log_tokens(db, "category_lookup", 1, tokens_before, client.tokens_left)
+
+    entry = (categories or {}).get(str(cat_id))
+    product_count = entry.get("productCount") if entry else None
+    if product_count is None:
+        return cached.product_count if cached is not None else None
+
+    if cached is None:
+        cached = models.CategorySize(cat_id=cat_id)
+        db.add(cached)
+    cached.name = entry.get("name")
+    cached.product_count = product_count
+    cached.fetched_at = models.utcnow()
+    db.commit()
+    return product_count

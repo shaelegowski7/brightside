@@ -1,16 +1,26 @@
 """Orchestrates one deal end-to-end: dedupe against `deals`, resolve the
-HUKD redirect, match to an ASIN (Amazon-URL shortcut -> JSON-LD -> model-
-number/title Keepa search -> give up), run the two-stage Keepa lookup +
-decision engine, and ping Discord subject to the ASIN cooldown. Shared by
-the scheduler's RSS poll job today; the Phase 2 /scan endpoint reuses the
-same process_deal() for its synchronous scan-and-verdict flow.
+HUKD redirect, sanity-check the scraped price against the page's own listed
+price, match to an ASIN (Amazon-URL shortcut -> JSON-LD -> model-number/
+title Keepa search -> give up), validate the matched title/brand actually
+looks like the deal (Fix Build Guide phase 2 -- catches a bad EAN-catalog
+mapping or a wrong title-search top result), run the two-stage Keepa lookup
++ decision engine, and ping Discord subject to the ASIN cooldown. A deal
+that fails to match, fails title validation, or fails the price-sanity
+check is dropped silently (status recorded, no Discord post) rather than
+posted as "unverified" -- per the Fix Build Guide, an unverified flood is
+worse than a quieter, trustworthy feed. The one exception is
+_UNMATCHABLE_BY_DESIGN_SOURCES (pokemon_center): that source has no EAN
+mechanism at all and no other notification path, so it keeps the old
+"UNVERIFIED MATCH" Discord post. Shared by the scheduler's RSS poll job
+today; the Phase 2 /scan endpoint reuses the same process_deal() for its
+synchronous scan-and-verdict flow.
 """
 from sqlalchemy.orm import Session
 
 from . import discord_notifier, keepa_client, models, resolver
 from .config import get_settings
 from .decision.engine import DecisionConfig, ScoreInput, Verdict, score_deal
-from .matching import amazon_url, cache, jsonld, model_number, title_search_cache
+from .matching import amazon_url, cache, jsonld, model_number, title_search_cache, title_validate
 from .pricing.fees import FeeProvider, SizeDims
 from .sources.base import RawDeal
 
@@ -35,6 +45,19 @@ _RETRIABLE_STATUSES = {"new", "resolved", "matched", "fetch_blocked"}
 # restocks, so the deals-table same-price skip would otherwise silently
 # suppress every restock after the first.
 _ALWAYS_RETRIABLE_SOURCES = {"pokemon_center"}
+
+# Sources with NO EAN/ASIN matching mechanism at all, by design -- not a
+# matching *failure* (see sources/pokemon_center.py: this site has no
+# GTIN/EAN anywhere and no title-search fallback was built for it). The Fix
+# Build Guide's "no match -> don't post" (phase 2) targets HUKD/retailer
+# arbitrage noise, where a failed match means "couldn't verify this is
+# resellable" -- that's not what's happening here. Pokemon Center's restock
+# alert has no matching step to fail in the first place; it's a distinct
+# stock-drop signal, and this is its *only* notification path, so silently
+# dropping every hit here would defeat the monitor entirely. These still get
+# an "UNVERIFIED MATCH" Discord post with no ROI/price scoring, same as
+# before this pipeline started dropping ordinary no-match deals.
+_UNMATCHABLE_BY_DESIGN_SOURCES = {"pokemon_center"}
 
 
 def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_provider: FeeProvider, app_cfg: dict) -> None:
@@ -63,6 +86,12 @@ def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_pr
     deal.status = "resolved"
     db.commit()
 
+    if resolved.html and not _price_is_sane(resolved.html, deal.buy_price, app_cfg):
+        deal.status = "price_sanity_reject"
+        db.commit()
+        print(f"[PIPELINE] {raw.url}: buy price {deal.buy_price}p implausible vs page's own listed price, dropping")
+        return
+
     asin = amazon_url.extract_asin(resolved.final_url)
     ean = None
     if asin:
@@ -80,16 +109,35 @@ def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_pr
     if not asin and not ean:
         deal.status = "no_ean_match"
         db.commit()
-        _ping_unverified(db, deal)
+        if raw.source in _UNMATCHABLE_BY_DESIGN_SOURCES:
+            _ping_unmatched_signal(db, deal)
+        else:
+            print(f"[PIPELINE] {raw.url}: no EAN/ASIN/title-search match, dropping")
         return
 
-    product, stage1 = _resolve_product(db, ean=ean, asin=asin, title=deal.title, matched_via=matched_via, confidence=confidence)
+    # Prefer the real Keepa-sourced title (when we already have one, from
+    # the title_search fallback) over the deal's own title when caching a
+    # new product -- needed so the title-validation check below has an
+    # independent signal to compare against instead of trivially comparing
+    # the deal title to itself.
+    resolve_title = (stage1_from_search.title if stage1_from_search and stage1_from_search.title else None) or deal.title
+    product, stage1 = _resolve_product(db, ean=ean, asin=asin, title=resolve_title, matched_via=matched_via, confidence=confidence)
     if stage1 is None:
         stage1 = stage1_from_search
     if product.asin is None:
         deal.status = "no_ean_match"
         db.commit()
-        _ping_unverified(db, deal)
+        print(f"[PIPELINE] {raw.url}: EAN extracted but no Keepa match, dropping")
+        return
+
+    # Title/brand validation (Fix Build Guide phase 2) -- only meaningful
+    # where the Amazon title is independent evidence. amazon_url matches
+    # have no independent title to check against (the ASIN came straight
+    # from the deal's own resolved Amazon URL), so skip those.
+    if matched_via in ("jsonld", "title_search") and not title_validate.titles_plausibly_match(deal.title, product.title):
+        deal.status = "title_mismatch"
+        db.commit()
+        print(f"[PIPELINE] {product.asin}: title mismatch ({deal.title!r} vs {product.title!r}), dropping")
         return
 
     deal.product_id = product.id
@@ -232,7 +280,11 @@ def _resolve_product(
     return product, result
 
 
-def _ping_unverified(db: Session, deal: models.Deal) -> None:
+def _ping_unmatched_signal(db: Session, deal: models.Deal) -> None:
+    """Only called for _UNMATCHABLE_BY_DESIGN_SOURCES (currently just
+    pokemon_center) -- see that set's docstring for why this source needs a
+    notification path even with zero match confidence, unlike ordinary
+    HUKD/retailer no-matches which are now dropped silently."""
     embed = discord_notifier.build_unverified_embed(
         title=deal.title, retailer_url=deal.retailer_url or deal.url,
         image_url=deal.image_url, retailer=deal.retailer, buy_price_pence=deal.buy_price,
@@ -240,6 +292,21 @@ def _ping_unverified(db: Session, deal: models.Deal) -> None:
     sent = discord_notifier.send_ping(get_settings().discord_webhook_url, embed)
     deal.status = "unverified_pinged" if sent else "ping_failed"
     db.commit()
+
+
+def _price_is_sane(html: str, buy_price_pence: int, app_cfg: dict) -> bool:
+    """Fix Build Guide phase 1: reject a scraped/parsed buy price that's
+    implausibly low vs the retailer page's own listed price (JSON-LD
+    offers.price) -- catches regex/parse mis-fires (e.g. a stray spec
+    number read as "£1.00 Longines") before they burn a Keepa lookup or
+    show up as a fake mega-ROI. Passes (returns True) whenever there's no
+    page price to check against -- this is a sanity check on a value we do
+    have, not a second match-confidence gate."""
+    page_price = jsonld.extract_price_pence(html)
+    min_ratio = (app_cfg.get("price_sanity") or {}).get("min_page_price_ratio")
+    if not page_price or not min_ratio:
+        return True
+    return buy_price_pence >= page_price * min_ratio
 
 
 def _score_and_record(
@@ -254,8 +321,17 @@ def _score_and_record(
     if stage2.package_weight_kg and stage2.package_longest_cm and stage2.package_dims_sum_cm:
         dims = SizeDims(stage2.package_weight_kg, stage2.package_longest_cm, stage2.package_dims_sum_cm)
     price_for_fees = stage2.buybox_price_pence or stage2.lowest_fba_offer_pence or 0
-    fees = fee_provider.get_fees(stage2.category or "", price_for_fees, dims, stage2.fba_fulfilment_fee_pence)
+    fees = fee_provider.get_fees(
+        stage2.category or "", price_for_fees, dims,
+        stage2.fba_fulfilment_fee_pence, stage2.referral_fee_percentage,
+    )
     oversize = fee_provider.classify_size_tier(dims) == "oversize"
+
+    category_rank_percentile = None
+    if stage2.leaf_category_id is not None and stage2.leaf_category_rank is not None:
+        category_size = keepa_client.get_category_size(db, stage2.leaf_category_id)
+        if category_size:
+            category_rank_percentile = stage2.leaf_category_rank / category_size
 
     score_input = ScoreInput(
         buy_price_pence=deal.buy_price,
@@ -273,6 +349,7 @@ def _score_and_record(
         hazmat=stage2.hazmat,
         oversize=oversize,
         gated=None,   # not checked — no SP-API yet
+        category_rank_percentile=category_rank_percentile,
     )
     result = score_deal(score_input, decision_cfg)
 

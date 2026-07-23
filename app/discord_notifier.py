@@ -97,6 +97,10 @@ def build_matched_embed(
 def build_unverified_embed(
     *, title: str, retailer_url: str, image_url: str | None, retailer: str | None, buy_price_pence: int
 ) -> dict:
+    """Only used for pipeline.py's _UNMATCHABLE_BY_DESIGN_SOURCES (currently
+    just pokemon_center, which has no EAN/matching mechanism at all) --
+    ordinary HUKD/retailer deals that fail to match are dropped silently
+    instead (Fix Build Guide phase 2)."""
     embed = {
         "title": f"UNVERIFIED MATCH — check manually: {title}",
         "url": retailer_url,

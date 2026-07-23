@@ -148,6 +148,53 @@ def test_no_live_offers_hard_rejects_with_no_sell_price():
     assert result.sell_price_pence is None
 
 
+def _velocity_base_input(**overrides) -> ScoreInput:
+    base = dict(
+        buy_price_pence=500,
+        match_confidence="high",
+        category="Toys & Games",
+        fba_offer_count=1,
+        amazon_on_listing=False,
+        sales_rank=20000,
+        buybox_price_pence=2500,
+        fees=FeeInput(
+            referral_fee_pence=375,
+            fba_fulfilment_fee_pence=230,
+            monthly_storage_fee_pence=27,
+            estimated=False,
+        ),
+    )
+    base.update(overrides)
+    return ScoreInput(**base)
+
+
+def test_velocity_gate_passes_on_monthly_sales_alone():
+    """est_monthly_sales clears the floor even with a loose (or unknown)
+    category_rank_percentile -- the two legs are OR'd."""
+    inp = _velocity_base_input(est_monthly_sales=12, category_rank_percentile=None)
+    result = score_deal(inp, default_config())
+    assert result.verdict in (Verdict.PASS, Verdict.PASS_WITH_FLAGS)
+
+
+def test_velocity_gate_passes_on_tight_rank_percentile_alone():
+    """Thin/no monthlySold data, but a genuinely top-tier leaf-category rank
+    clears the floor via the other OR leg."""
+    inp = _velocity_base_input(est_monthly_sales=None, category_rank_percentile=0.01)
+    result = score_deal(inp, default_config())
+    assert result.verdict in (Verdict.PASS, Verdict.PASS_WITH_FLAGS)
+
+
+def test_velocity_gate_rejects_batmobile_shaped_deal():
+    """Fix Build Guide's motivating example: green ROI, but only ~4 sales/mo
+    and a loose category-rank percentile -> dead stock, must reject."""
+    inp = _velocity_base_input(est_monthly_sales=4, category_rank_percentile=0.04)
+    result = score_deal(inp, default_config())
+    assert result.verdict == Verdict.REJECT
+    assert "velocity_floor" in result.verdict_reason
+    # would otherwise have passed comfortably (buy 500p, sell 2500p)
+    assert "roi" not in (result.verdict_reason or "")
+
+
 def test_roi_below_threshold_rejects_after_financials():
     """Thin margin: passes every hard filter but roi/net_profit both miss
     threshold -> REJECT with the numbers still populated for review."""

@@ -67,9 +67,33 @@ hukd:
     - "Playstation Store"
     - "Nintendo eShop"
     - "Humble Bundle"
+    - "WizzAir"
+    - "Lebara"
+    - "Loaded"
+    - "AliExpress"
+    - "Joybuy"
 
 decision:
   inbound_shipping_pence: 40   # spec default £0.40/unit
+
+# Reject a scraped/parsed buy price that's implausibly low vs the retailer
+# page's own listed price — catches regex/parse mis-fires (e.g. "£1.00
+# Longines") before they burn a Keepa lookup or look like a fake mega-ROI.
+price_sanity:
+  min_page_price_ratio: 0.05
+
+# Velocity gate (Fix Build Guide phase 3): reject deals that are ROI-green
+# but effectively dead stock. A deal must clear EITHER leg:
+# - est_monthly_sales >= min_monthly_sales (Keepa monthlySold / rank-drop proxy), or
+# - category_rank_percentile <= top_category_percentile, computed at the
+#   *leaf* category level (see keepa_client.stage2_full's leaf_category_id/
+#   leaf_category_rank) — root-level percentile is too coarse to mean
+#   anything (verified live: top 2% of a 22M-product root category is a
+#   looser bound than the existing default_rank_threshold).
+velocity:
+  min_monthly_sales: 10
+  top_category_percentile: 0.02
+  category_size_cache_ttl_days: 30
 
 # Argos clearance scraper (Phase 2). Requires SCRAPERAPI_KEY — Argos's Akamai
 # edge blocks every direct request from this app's hosting IP (confirmed

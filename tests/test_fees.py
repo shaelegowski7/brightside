@@ -1,7 +1,9 @@
-"""FeeTableProvider: config-table fallback vs Keepa-sourced fulfilment fee.
-See pricing/fees.py's module docstring for why Keepa's fbaFees replaces the
-SP-API getMyFeesEstimate plan (cost/eligibility bar too high for this
-project) for the fulfilment-fee component specifically."""
+"""FeeTableProvider: config-table fallback vs Keepa-sourced fulfilment fee
+and referral %. See pricing/fees.py's module docstring for why Keepa's
+fbaFees/referralFeePercentage replace the SP-API getMyFeesEstimate plan
+(cost/eligibility bar too high for this project) for both fee components.
+`estimated` is only False when BOTH components are Keepa-sourced -- either
+one still falling back to the config table means the result is a guess."""
 from app.pricing.fees import FeeTableProvider, SizeDims
 
 
@@ -28,14 +30,30 @@ def test_falls_back_to_size_tier_table_when_no_keepa_fee():
 def test_uses_keepa_fulfilment_fee_when_provided():
     fees = _provider().get_fees("Electronics", 2000, dims=None, keepa_fulfilment_fee_pence=280)
     assert fees.fba_fulfilment_fee_pence == 280
-    assert fees.estimated is False
+    # Still estimated overall -- no keepa_referral_pct was supplied, so that
+    # component fell back to the config table.
+    assert fees.estimated is True
 
 
-def test_referral_fee_still_table_sourced_even_with_keepa_fulfilment_fee():
-    # Keepa doesn't supply a referral fee — that stays category-percentage-based
+def test_referral_fee_still_table_sourced_without_keepa_referral_pct():
+    # No keepa_referral_pct supplied -> stays category-percentage-based,
     # regardless of whether the fulfilment fee came from Keepa or the table.
     fees = _provider().get_fees("Electronics", 2000, dims=None, keepa_fulfilment_fee_pence=280)
     assert fees.referral_fee_pence == round(2000 * 0.08)
+
+
+def test_uses_keepa_referral_pct_when_provided():
+    # 13.0 == 13% (percentage points, not a 0-1 fraction) -- overrides the
+    # config table's 8% for Electronics.
+    fees = _provider().get_fees("Electronics", 2000, dims=None, keepa_referral_pct=13.0)
+    assert fees.referral_fee_pence == round(2000 * 0.13)
+
+
+def test_estimated_false_only_when_both_fee_components_are_keepa_sourced():
+    fees = _provider().get_fees(
+        "Electronics", 2000, dims=None, keepa_fulfilment_fee_pence=280, keepa_referral_pct=13.0,
+    )
+    assert fees.estimated is False
 
 
 def test_keepa_fee_does_not_override_size_tier_classification():

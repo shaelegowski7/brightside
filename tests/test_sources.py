@@ -4,7 +4,7 @@ https://www.hotukdeals.com/rss/trending (pepper:merchant is a single dict
 per entry, not a list — verified against the real feedparser output)."""
 import feedparser
 
-from app.sources.hotukdeals import _image_url, _merchant_name, _parse_price_pence
+from app.sources.hotukdeals import HotUKDealsAdapter, _clean_title, _image_url, _merchant_name, _parse_price_pence
 
 _FIXTURE_RSS = """<?xml version="1.0" encoding="UTF-8"?>
 <rss xmlns:pepper="http://www.pepper.com/rss" xmlns:media="http://search.yahoo.com/mrss/" version="2.0">
@@ -60,3 +60,17 @@ def test_returns_none_when_no_price_anywhere():
     entries = _parse_fixture().entries
     e = entries[2]
     assert _parse_price_pence(e) is None
+
+
+def test_clean_title_strips_leading_heat_indicator():
+    # Confirmed live 2026-07-23 against the real /rss/trending feed -- it's
+    # a degree symbol ("111°"), not a zero-width character.
+    assert _clean_title("111° - Jameson Original Triple Distilled Blended Irish Whiskey, 70cl") == \
+        "Jameson Original Triple Distilled Blended Irish Whiskey, 70cl"
+    assert _clean_title("No price anywhere in this title") == "No price anywhere in this title"
+
+
+def test_poll_returns_cleaned_titles():
+    deals = HotUKDealsAdapter(_FIXTURE_RSS).poll()
+    assert deals[0].title == "Jameson Original Triple Distilled Blended Irish Whiskey, 70cl"
+    assert deals[1].title == "24 birdseye chicken nuggets instore Blakenall/Walsall - £1.50 @ Heron Foods"

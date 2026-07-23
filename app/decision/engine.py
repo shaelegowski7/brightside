@@ -61,6 +61,7 @@ class ScoreInput:
     hazmat: bool = False
     oversize: bool = False
     gated: bool | None = None        # None = not checked (no SP-API yet)
+    category_rank_percentile: float | None = None   # sales_rank / leaf-category productCount; None if unavailable
 
 
 @dataclass
@@ -88,12 +89,15 @@ class DecisionConfig:
     default_rank_threshold: int
     category_blocklist: set
     inbound_shipping_pence: int
+    velocity_min_monthly_sales: float = 10.0
+    velocity_top_percentile: float = 0.02
 
     @classmethod
     def from_app_config(cls, cfg: dict) -> "DecisionConfig":
         thresholds = cfg["thresholds"]
         rank_cfg = dict(cfg["category_rank_thresholds"])
         default_rank_threshold = rank_cfg.pop("default_rank_threshold")
+        velocity_cfg = cfg.get("velocity") or {}
         return cls(
             min_roi=thresholds["min_roi"],
             min_net_profit_pence=thresholds["min_net_profit_pence"],
@@ -106,6 +110,8 @@ class DecisionConfig:
             default_rank_threshold=default_rank_threshold,
             category_blocklist=set(cfg.get("category_blocklist") or []),
             inbound_shipping_pence=cfg["decision"]["inbound_shipping_pence"],
+            velocity_min_monthly_sales=velocity_cfg.get("min_monthly_sales", 10.0),
+            velocity_top_percentile=velocity_cfg.get("top_category_percentile", 0.02),
         )
 
 
@@ -150,6 +156,23 @@ def score_deal(inp: ScoreInput, cfg: DecisionConfig) -> ScoreResult:
         return _reject("hazmat", sell_price)
     if inp.oversize and cfg.reject_oversize:
         return _reject("oversize", sell_price)
+
+    # --- velocity gate (Fix Build Guide phase 3): reject ROI-green dead
+    # stock -- must clear EITHER a minimum monthly-sales volume OR a tight
+    # rank percentile within its actual (leaf) category. Percentile is
+    # deliberately NOT computed against the coarse root category here --
+    # see keepa_client._leaf_category's docstring for why that would be
+    # almost meaningless (root categories can run into the tens of millions
+    # of products). category_rank_percentile is None whenever leaf-category
+    # data wasn't available, in which case only the sales-volume leg counts. ---
+    sales_ok = (inp.est_monthly_sales or 0) >= cfg.velocity_min_monthly_sales
+    rank_ok = inp.category_rank_percentile is not None and inp.category_rank_percentile <= cfg.velocity_top_percentile
+    if not (sales_ok or rank_ok):
+        return _reject(
+            f"velocity_floor: est_monthly_sales={inp.est_monthly_sales} "
+            f"category_rank_percentile={inp.category_rank_percentile}",
+            sell_price,
+        )
 
     # --- financials ---
     fee_vat_mult = 1.0 if cfg.vat_registered else 1.20
