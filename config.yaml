@@ -165,28 +165,28 @@ argos:
 
 # Smyths Toys UK clearance/sale scraper. Same crawl_state (price-diff)
 # pattern as Argos -- see app/sources/smyths.py's module docstring for the
-# full recon writeup. Confirmed via Wayback Machine archive snapshots only
-# (no local SCRAPERAPI_KEY was available to test live): Nuxt 3 (Vue SSR)
-# storefront, product tiles parsed by DOM pattern (no __NEXT_DATA__-style
-# array like Argos); GTIN comes from a data-loadbee-gtin="<ean>" attribute
-# on the product page, NOT from JSON-LD (confirmed absent there on 2
-# products). `enabled: false` — TWO things need live verification before
-# flipping this on, not just the usual backfill-cost warning:
+# full recon writeup. Structure confirmed via Wayback Machine archive
+# snapshots only (Nuxt 3/Vue SSR storefront, DOM-parsed product tiles, GTIN
+# from a data-loadbee-gtin="<ean>" attribute, not JSON-LD). Re-confirmed live
+# 2026-07-25 via a real browser with no proxy: /uk/en-gb/sale still hits
+# Smyths' Incapsula bot-challenge directly (title empty, 0 product tiles,
+# Incapsula marker present) -- unchanged from the original recon. TWO things
+# remain genuinely unverified, not just the usual backfill-cost warning:
 #   1. category_urls below is a best guess, NOT a confirmed working "browse
-#      all sale items" URL — /uk/en-gb/sale was never successfully fetched
-#      in this environment (always hit Smyths' Incapsula bot-challenge, in
-#      4 of 6 attempts across the whole site, including via the Wayback
-#      Machine's own crawler). A structurally similar page (/outdoor)
-#      turned out to be a curated ~20-item CMS landing page with no
-#      pagination, not a deep catalog — the real sale page may have the
-#      same shape.
-#   2. Whether ScraperAPI's standard proxy pool can bypass Smyths'
-#      Incapsula/Imperva protection at all is unverified (a harder class of
-#      block than Argos's Akamai — may need ScraperAPI's premium/JS-render
-#      tier). If it can't get through, this source will just silently find
-#      0 items every crawl rather than error.
+#      all sale items" URL -- a structurally similar page (/outdoor) turned
+#      out to be a curated ~20-item CMS landing page with no pagination, not
+#      a deep catalog -- the real sale page may have the same shape.
+#   2. Whether ScraperAPI's proxy pool can bypass Incapsula at all is
+#      unverified (a harder class of block than Argos's Akamai -- may need
+#      ScraperAPI's premium/JS-render tier). No local ScraperAPI key exists
+#      to test this path directly.
+# `enabled: true` per explicit instruction to find out live rather than
+# keep guessing -- if ScraperAPI can't get through, this source just finds
+# 0 items every crawl (see fetch-failure handling in smyths.py), it can't
+# break anything else. Watch `railway logs` for "[SMYTHS]" lines after
+# deploying to see which caveat (if either) actually holds in production.
 smyths:
-  enabled: false
+  enabled: true
   poll_interval_minutes: 180
   min_delay_seconds: 5
   max_delay_seconds: 15
