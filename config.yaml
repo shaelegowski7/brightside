@@ -220,6 +220,21 @@ pokemon_center:
     - "https://www.pokemoncenter.com/en-gb/category/elite-trainer-box"
     - "https://www.pokemoncenter.com/en-gb/category/booster-packs"
 
+# Aggregate funnel + Keepa token-spend reporting. Uses existing deals.status
+# and token_log data (see app/monitoring.py) -- no new logging call sites.
+# Posts a daily Discord summary so the widened feeds/categories above are
+# observable: is each source producing scored matches or just noise, and is
+# total token spend staying inside budget. Also queryable on demand via
+# GET /status/summary?hours=N.
+monitoring:
+  daily_summary_enabled: true
+  summary_window_hours: 24
+  # Spec baseline: ~500-1300 tokens/day normally, 2000-4500 on store-run
+  # days, ~28800/day base-tier ceiling. Set above the widened-volume
+  # baseline but comfortably below the hard ceiling so an alert means
+  # something real -- tune down once a few real days of data exist.
+  daily_token_budget_alert: 6000
+
 # Category-based fee estimate fallback (SP-API not live yet). Ballpark figures
 # based on Amazon UK's public referral-fee schedule and FBA size tiers — verify
 # against Amazon's current published rates before trusting the numbers; every

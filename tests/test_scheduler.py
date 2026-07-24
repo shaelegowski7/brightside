@@ -3,7 +3,7 @@
 storefronts (Skyscanner, Ryanair, PlayStation Store, etc.) that can never
 match a physical Amazon product — those get filtered before even reaching
 process_deal, distinct from deals that reach it and fail to match."""
-from app import pipeline, scheduler
+from app import discord_notifier, monitoring, pipeline, scheduler
 from app.sources.base import RawDeal
 
 
@@ -67,3 +67,32 @@ def test_blocklist_match_is_case_insensitive(monkeypatch):
     scheduler.poll_hukd_feeds()
 
     assert processed == []
+
+
+def test_post_daily_summary_passes_config_through_to_embed_and_posts(monkeypatch):
+    app_cfg = {
+        "monitoring": {"summary_window_hours": 12, "daily_token_budget_alert": 999},
+        "discord": {},
+    }
+    monkeypatch.setattr(scheduler, "get_config", lambda: app_cfg)
+    monkeypatch.setattr(scheduler, "get_settings", lambda: type("S", (), {"discord_webhook_url": "https://discord.example/hook"})())
+
+    build_summary_calls = []
+    monkeypatch.setattr(monitoring, "build_summary", lambda db, hours: build_summary_calls.append(hours) or {"fake": "summary"})
+
+    embed_calls = []
+
+    def fake_build_embed(summary, token_budget_alert=None):
+        embed_calls.append((summary, token_budget_alert))
+        return {"title": "fake embed"}
+
+    monkeypatch.setattr(discord_notifier, "build_summary_embed", fake_build_embed)
+
+    send_calls = []
+    monkeypatch.setattr(discord_notifier, "send_ping", lambda url, embed: send_calls.append((url, embed)) or True)
+
+    scheduler.post_daily_summary()
+
+    assert build_summary_calls == [12]
+    assert embed_calls == [({"fake": "summary"}, 999)]
+    assert send_calls == [("https://discord.example/hook", {"title": "fake embed"})]

@@ -2,10 +2,12 @@
 scheduler startup live in main.py, DB session handling in database.py.
 Schema is Alembic-managed (`alembic upgrade head` runs as the Railway
 release step — see Procfile), not create_all(), per this project's stack."""
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
-from .database import engine
+from . import monitoring
+from .database import engine, get_db
 from .scheduler import scheduler, start_scheduler
 
 app = FastAPI(title="FBA Deal Scanner")
@@ -16,6 +18,11 @@ start_scheduler()
 @app.get("/")
 def root():
     return {"message": "FBA Deal Scanner"}
+
+
+@app.get("/status/summary")
+def status_summary(hours: int = 24, db: Session = Depends(get_db)):
+    return monitoring.build_summary(db, hours=hours)
 
 
 @app.get("/health")

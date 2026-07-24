@@ -116,6 +116,40 @@ def build_unverified_embed(
     return embed
 
 
+def build_summary_embed(summary: dict, token_budget_alert: int | None = None) -> dict:
+    """Daily funnel + Keepa token-spend digest -- see monitoring.build_summary
+    for the data shape. `token_budget_alert` (config.yaml monitoring.
+    daily_token_budget_alert) flips the embed amber when exceeded so an
+    over-budget day is visible without reading numbers closely."""
+    by_source = summary["by_source"]
+    tokens = summary["keepa_tokens"]
+
+    lines = []
+    for source in sorted(by_source):
+        counts = by_source[source]
+        total = sum(counts.values())
+        scored = counts.get("stage2_scored", 0)
+        pinged = counts.get("pinged", 0) + counts.get("unverified_pinged", 0)
+        lines.append(f"**{source}**: {total} seen · {scored} scored · {pinged} pinged")
+    source_text = "\n".join(lines) if lines else "No deals seen in this window."
+
+    total_tokens = tokens["total_consumed"]
+    over_budget = token_budget_alert is not None and total_tokens > token_budget_alert
+    token_str = (
+        f"{total_tokens} (budget {token_budget_alert})" if token_budget_alert is not None else str(total_tokens)
+    )
+
+    embed = {
+        "title": f"Daily summary — last {summary['hours']}h",
+        "color": COLOR_AMBER if over_budget else COLOR_GREEN,
+        "fields": [
+            _field("Sources", source_text, inline=False),
+            _field("Keepa tokens used", token_str, inline=False),
+        ],
+    }
+    return embed
+
+
 def send_ping(webhook_url: str, embed: dict) -> bool:
     try:
         resp = requests.post(webhook_url, json={"embeds": [embed]}, timeout=_TIMEOUT_SECONDS)

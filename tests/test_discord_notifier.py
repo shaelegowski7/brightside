@@ -1,5 +1,5 @@
 from app import models
-from app.discord_notifier import build_matched_embed, build_unverified_embed, record_ping, should_ping
+from app.discord_notifier import build_matched_embed, build_summary_embed, build_unverified_embed, record_ping, should_ping
 from app.decision.engine import ScoreResult, Verdict
 
 
@@ -81,3 +81,38 @@ def test_build_unverified_embed_flags_check_manually():
     )
     assert "UNVERIFIED MATCH — check manually" in embed["title"]
     assert embed["color"] == 0xF1C40F
+
+
+def _summary(total_tokens: int, hours: int = 24) -> dict:
+    return {
+        "hours": hours,
+        "by_source": {
+            "hotukdeals": {"pinged": 3, "no_ean_match": 10, "stage2_scored": 3},
+            "argos": {"stage2_scored": 1},
+        },
+        "keepa_tokens": {"total_consumed": total_tokens, "by_stage": {}},
+    }
+
+
+def test_build_summary_embed_under_budget_is_green():
+    embed = build_summary_embed(_summary(total_tokens=1000), token_budget_alert=6000)
+    assert embed["color"] == 0x2ECC71
+    assert "hotukdeals" in embed["fields"][0]["value"]
+    assert "1000 (budget 6000)" in embed["fields"][1]["value"]
+
+
+def test_build_summary_embed_over_budget_is_amber():
+    embed = build_summary_embed(_summary(total_tokens=7000), token_budget_alert=6000)
+    assert embed["color"] == 0xF1C40F
+
+
+def test_build_summary_embed_no_budget_configured():
+    embed = build_summary_embed(_summary(total_tokens=500), token_budget_alert=None)
+    assert embed["color"] == 0x2ECC71
+    assert embed["fields"][1]["value"] == "500"
+
+
+def test_build_summary_embed_no_deals_in_window():
+    summary = {"hours": 24, "by_source": {}, "keepa_tokens": {"total_consumed": 0, "by_stage": {}}}
+    embed = build_summary_embed(summary)
+    assert embed["fields"][0]["value"] == "No deals seen in this window."

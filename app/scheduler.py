@@ -6,7 +6,7 @@ doesn't pile up overlapping runs."""
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-from . import pipeline
+from . import discord_notifier, monitoring, pipeline
 from .config import get_config, get_settings
 from .database import SessionLocal
 from .decision.engine import DecisionConfig
@@ -131,6 +131,23 @@ def poll_pokemon_center() -> None:
         db.close()
 
 
+def post_daily_summary() -> None:
+    app_cfg = get_config()
+    monitoring_cfg = app_cfg.get("monitoring", {})
+    hours = monitoring_cfg.get("summary_window_hours", 24)
+    token_budget = monitoring_cfg.get("daily_token_budget_alert")
+
+    db = SessionLocal()
+    try:
+        summary = monitoring.build_summary(db, hours=hours)
+    finally:
+        db.close()
+
+    embed = discord_notifier.build_summary_embed(summary, token_budget_alert=token_budget)
+    ok = discord_notifier.send_ping(get_settings().discord_webhook_url, embed)
+    print(f"[SCHEDULER] daily summary posted: {ok}")
+
+
 def start_scheduler() -> None:
     app_cfg = get_config()
     interval_minutes = app_cfg["hukd"]["poll_interval_minutes"]
@@ -181,6 +198,18 @@ def start_scheduler() -> None:
             replace_existing=True,
         )
         print(f"[SCHEDULER] pokemon_center enabled, polling every {pc_interval}m")
+
+    monitoring_cfg = app_cfg.get("monitoring", {})
+    if monitoring_cfg.get("daily_summary_enabled", True):
+        scheduler.add_job(
+            post_daily_summary,
+            IntervalTrigger(hours=24),
+            id="post_daily_summary",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        print("[SCHEDULER] daily summary enabled, posting every 24h")
 
     scheduler.start()
     print(f"[SCHEDULER] started, polling every {interval_minutes}m")
