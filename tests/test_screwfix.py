@@ -65,9 +65,17 @@ def test_parse_listing_no_products_key_returns_empty():
     assert screwfix._parse_listing(html) == []
 
 
-def test_crawl_single_page_no_pagination(db_session, monkeypatch):
-    """Pagination is unconfirmed (see module docstring) -- crawl() fetches
-    exactly one page per configured category_url, no page-2 attempt."""
+def test_with_page_size_appends_correctly_with_and_without_existing_query():
+    assert screwfix._with_page_size("https://www.screwfix.com/search?search=clearancepromo") == \
+        "https://www.screwfix.com/search?search=clearancepromo&page_size=100"
+    assert screwfix._with_page_size("https://www.screwfix.com/search") == \
+        "https://www.screwfix.com/search?page_size=100"
+
+
+def test_crawl_appends_page_size_100_and_fetches_once_per_category(db_session, monkeypatch):
+    """Real ceiling confirmed live via Playwright network capture (see module
+    docstring) -- crawl() fetches exactly one page per configured
+    category_url, always at page_size=100, no further pagination attempt."""
     listing_page = _listing_html([_product("111A", "Widget", "/p/widget/111a", 10.0)], total=1557)
 
     calls = []
@@ -90,7 +98,7 @@ def test_crawl_single_page_no_pagination(db_session, monkeypatch):
     assert deals[0].url == "https://www.screwfix.com/p/widget/111a"
     assert deals[0].buy_price_pence == 1000
     assert deals[0].html == ""   # no EAN mechanism -- pipeline falls to title-search
-    assert calls == ["https://www.screwfix.com/search?search=clearancepromo"]
+    assert calls == ["https://www.screwfix.com/search?search=clearancepromo&page_size=100"]
 
     # Second crawl, same price -> unchanged -> no on_deal call.
     deals_second = []

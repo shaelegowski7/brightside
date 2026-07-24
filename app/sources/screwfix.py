@@ -19,15 +19,20 @@ from this source falls through to the pipeline's title-search fallback
 (spec priority #2), same as an HUKD post naming a product with no scraped
 identifier -- lower match confidence, but a real fallback, not a dead end.
 
-Pagination is UNCONFIRMED beyond page 1: neither `&offset=20` nor `&page=2`
+Pagination beyond 100 results is UNCONFIRMED: neither `&offset=` nor `&page=`
 advanced the result set in testing (confirmed live 2026-07-24 -- both came
 back with 0 products, as if the param were treated as an unmatched facet
-filter rather than real pagination), despite `totalProducts` reporting far
-more than 20 are available and a `pagination: {offset, limit}` field
-existing in the payload. Capped at one page per search term/category URL
-(same "wrong guess degrades to under-coverage, not a crash" contract as
-Smyths' unconfirmed pagination) until the real mechanism (likely a
-client-side-only "load more" AJAX call) is found.
+filter rather than real pagination). The real mechanism, found via Playwright
+network capture of the site's own "100 per page" UI control (confirmed live
+2026-07-25): `&page_size=100` -- a genuine, publicly-fetchable query param on
+the page URL itself (no auth needed, unlike the site's `ffx-browse-bff`
+JSON API the same control calls client-side, which 401s on a bare request
+since it needs a bearer token this app doesn't have). `page_size` values
+above 100 were tried and silently fall back to a 0-product response, so 100
+is the real server-side ceiling -- still a 5x improvement over the default
+20/page. Every fetch appends `page_size=100` automatically (see
+_with_page_size below); category_urls in config.yaml don't need to include
+it themselves.
 
 No bot protection detected (confirmed live 2026-07-24: plain requests with a
 browser User-Agent succeed) -- fetches go through direct_fetch, not
@@ -52,6 +57,11 @@ class _ListingProduct:
     title: str
     price_pence: int
     url: str
+
+
+def _with_page_size(category_url: str) -> str:
+    sep = "&" if "?" in category_url else "?"
+    return f"{category_url}{sep}page_size=100"
 
 
 def _find_enriched_data(node) -> dict | None:
@@ -110,14 +120,15 @@ class ScrewfixAdapter:
         self.max_delay_s = max_delay_s
 
     def crawl(self, db: Session, on_deal: Callable[[RawDeal], None]) -> int:
-        """One fetch per configured search/category URL (pagination
-        unconfirmed -- see module docstring), calling on_deal(raw)
-        immediately for each new/changed item, same crash-safety reasoning
-        as ArgosAdapter.crawl. Returns the count of deals found."""
+        """One fetch per configured search/category URL, at the confirmed
+        page_size=100 ceiling (pagination beyond that is unconfirmed -- see
+        module docstring), calling on_deal(raw) immediately for each new/
+        changed item, same crash-safety reasoning as ArgosAdapter.crawl.
+        Returns the count of deals found."""
         count = 0
         for category_url in self.category_urls:
             self._delay()
-            result = direct_fetch.fetch(category_url)
+            result = direct_fetch.fetch(_with_page_size(category_url))
             if result is None or result[0] != 200:
                 print(f"[SCREWFIX] {category_url}: fetch failed ({result[0] if result else 'error'}), skipping")
                 continue

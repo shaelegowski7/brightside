@@ -220,10 +220,13 @@ bq:
 # just a CMS hub with no product data; the real paginated listing is the
 # search-results page for "clearancepromo" instead (see app/sources/
 # screwfix.py's module docstring). No EAN anywhere on this site -- every
-# match falls through to the title-search fallback. Pagination beyond page 1
-# is UNCONFIRMED (neither &offset= nor &page= advanced the result set in
-# testing) -- capped at one page per search term until the real mechanism is
-# found, so this under-covers rather than risks 0-item pages silently.
+# match falls through to the title-search fallback. The adapter auto-appends
+# page_size=100 to every fetch (found live 2026-07-25 via Playwright network
+# capture of the site's own "100 per page" control -- 5x more items than the
+# 20/page default, and the real ceiling: values above 100 silently fall back
+# to 0 results). True pagination past 100 results is still unreachable via
+# plain HTTP (the site's own per-page toggle calls an auth-token-gated JSON
+# API this app can't authenticate against).
 screwfix:
   enabled: true
   poll_interval_minutes: 180
