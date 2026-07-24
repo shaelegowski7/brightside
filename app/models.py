@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     Column,
     DateTime,
@@ -152,11 +153,14 @@ class CategorySize(Base):
     barely change, so this is a long-TTL cache (see keepa_client.
     get_category_size) that makes each distinct leaf category an
     effectively one-time Keepa cost for the velocity gate's rank-percentile
-    leg (see decision/engine.py)."""
+    leg (see decision/engine.py). cat_id is BigInteger, not Integer -- some
+    real Keepa leaf category IDs exceed Postgres's 4-byte INTEGER range
+    (confirmed live 2026-07-24: catId 30117754031, ~14x int32's max, hit
+    NumericValueOutOfRange and silently dropped that deal's processing)."""
 
     __tablename__ = "category_size"
 
-    cat_id = Column(Integer, primary_key=True)
+    cat_id = Column(BigInteger, primary_key=True)
     name = Column(String, nullable=True)
     product_count = Column(Integer, nullable=False)
     fetched_at = Column(DateTime(timezone=True), default=utcnow)
