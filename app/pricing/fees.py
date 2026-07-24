@@ -15,6 +15,8 @@ buyers verify manually in Seller Central before purchasing."""
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+from sqlalchemy.orm import Session
+
 from app.decision.engine import FeeInput
 
 _SIZE_TIER_ORDER = ("small_standard", "standard", "large_standard")
@@ -33,6 +35,7 @@ class FeeProvider(ABC):
         self, category: str, sell_price_pence: int, dims: SizeDims | None,
         keepa_fulfilment_fee_pence: int | None = None,
         keepa_referral_pct: float | None = None,
+        asin: str | None = None,
     ) -> FeeInput:
         ...
 
@@ -71,6 +74,7 @@ class FeeTableProvider(FeeProvider):
         self, category: str, sell_price_pence: int, dims: SizeDims | None,
         keepa_fulfilment_fee_pence: int | None = None,
         keepa_referral_pct: float | None = None,
+        asin: str | None = None,   # accepted, ignored -- this provider has no per-ASIN data source
     ) -> FeeInput:
         tier = self.classify_size_tier(dims)
         storage_key = "oversize" if tier == "oversize" else "standard"
@@ -101,3 +105,56 @@ class FeeTableProvider(FeeProvider):
             monthly_storage_fee_pence=self._storage_fee_by_tier[storage_key],
             estimated=referral_estimated or fulfilment_estimated,
         )
+
+
+class SpApiFeeProvider(FeeProvider):
+    """Layers SP-API (Phase 2, dormant) on top of an unchanged fallback --
+    itself already layered on Keepa-preferred values, see FeeTableProvider
+    above. SP-API is tried first when an asin is given and spapi_client.
+    is_configured(); falls through unchanged to today's fallback behavior
+    otherwise, so nothing regresses while SP-API stays unconfigured (every
+    real deployment today -- see app/spapi_client.py's module docstring).
+    monthly_storage_fee_pence always comes from the fallback: SP-API's fee
+    estimate doesn't include a storage-fee component, that's a separate
+    SP-API surface not in scope here."""
+
+    def __init__(self, db: Session, fallback: FeeProvider):
+        self._db = db
+        self._fallback = fallback
+
+    def classify_size_tier(self, dims: SizeDims | None) -> str:
+        return self._fallback.classify_size_tier(dims)
+
+    def get_fees(
+        self, category: str, sell_price_pence: int, dims: SizeDims | None,
+        keepa_fulfilment_fee_pence: int | None = None,
+        keepa_referral_pct: float | None = None,
+        asin: str | None = None,
+    ) -> FeeInput:
+        from app import spapi_client   # deferred: avoids importing spapi_client at module load for every fee lookup
+
+        fallback_fees = self._fallback.get_fees(category, sell_price_pence, dims, keepa_fulfilment_fee_pence, keepa_referral_pct, asin)
+        if not asin:
+            return fallback_fees
+
+        result = spapi_client.get_fees_estimate(self._db, asin, sell_price_pence)
+        if result is None:
+            return fallback_fees
+
+        return FeeInput(
+            referral_fee_pence=result.referral_fee_pence,
+            fba_fulfilment_fee_pence=result.fba_fulfilment_fee_pence,
+            monthly_storage_fee_pence=fallback_fees.monthly_storage_fee_pence,
+            estimated=False,
+        )
+
+
+def build_fee_provider(db: Session, app_cfg: dict) -> FeeProvider:
+    """Single place the "is SP-API on?" branch lives -- used by both the
+    scheduler's poll jobs and /scan, so they can never drift out of sync."""
+    from app import spapi_client
+
+    fallback = FeeTableProvider(app_cfg["fees"])
+    if spapi_client.is_configured():
+        return SpApiFeeProvider(db, fallback)
+    return fallback

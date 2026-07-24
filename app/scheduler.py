@@ -10,7 +10,7 @@ from . import discord_notifier, monitoring, pipeline
 from .config import get_config, get_settings
 from .database import SessionLocal
 from .decision.engine import DecisionConfig
-from .pricing.fees import FeeTableProvider
+from .pricing import fees
 from .sources.argos import ArgosAdapter
 from .sources.hotukdeals import HotUKDealsAdapter
 from .sources.pokemon_center import PokemonCenterAdapter
@@ -22,11 +22,11 @@ scheduler = BackgroundScheduler()
 def poll_hukd_feeds() -> None:
     app_cfg = get_config()
     decision_cfg = DecisionConfig.from_app_config(app_cfg)
-    fee_provider = FeeTableProvider(app_cfg["fees"])
     merchant_blocklist = {m.lower() for m in app_cfg["hukd"].get("merchant_blocklist", [])}
 
     db = SessionLocal()
     try:
+        fee_provider = fees.build_fee_provider(db, app_cfg)
         for feed in app_cfg["hukd"]["feeds"]:
             adapter = HotUKDealsAdapter(feed["url"])
             try:
@@ -51,7 +51,6 @@ def poll_argos_clearance() -> None:
     app_cfg = get_config()
     argos_cfg = app_cfg.get("argos", {})
     decision_cfg = DecisionConfig.from_app_config(app_cfg)
-    fee_provider = FeeTableProvider(app_cfg["fees"])
     adapter = ArgosAdapter(
         category_urls=argos_cfg["category_urls"],
         api_key=get_settings().scraperapi_key,
@@ -60,6 +59,7 @@ def poll_argos_clearance() -> None:
     )
 
     db = SessionLocal()
+    fee_provider = fees.build_fee_provider(db, app_cfg)
 
     def _on_deal(raw) -> None:
         try:
@@ -79,7 +79,6 @@ def poll_smyths_clearance() -> None:
     app_cfg = get_config()
     smyths_cfg = app_cfg.get("smyths", {})
     decision_cfg = DecisionConfig.from_app_config(app_cfg)
-    fee_provider = FeeTableProvider(app_cfg["fees"])
     adapter = SmythsAdapter(
         category_urls=smyths_cfg["category_urls"],
         api_key=get_settings().scraperapi_key,
@@ -88,6 +87,7 @@ def poll_smyths_clearance() -> None:
     )
 
     db = SessionLocal()
+    fee_provider = fees.build_fee_provider(db, app_cfg)
 
     def _on_deal(raw) -> None:
         try:
@@ -107,7 +107,6 @@ def poll_pokemon_center() -> None:
     app_cfg = get_config()
     pc_cfg = app_cfg.get("pokemon_center", {})
     decision_cfg = DecisionConfig.from_app_config(app_cfg)
-    fee_provider = FeeTableProvider(app_cfg["fees"])
     adapter = PokemonCenterAdapter(
         category_urls=pc_cfg["category_urls"],
         api_key=get_settings().scraperapi_key,
@@ -116,6 +115,7 @@ def poll_pokemon_center() -> None:
     )
 
     db = SessionLocal()
+    fee_provider = fees.build_fee_provider(db, app_cfg)
 
     def _on_deal(raw) -> None:
         try:
@@ -146,6 +146,22 @@ def post_daily_summary() -> None:
     embed = discord_notifier.build_summary_embed(summary, token_budget_alert=token_budget)
     ok = discord_notifier.send_ping(get_settings().discord_webhook_url, embed)
     print(f"[SCHEDULER] daily summary posted: {ok}")
+
+
+def post_weekly_summary() -> None:
+    app_cfg = get_config()
+    monitoring_cfg = app_cfg.get("monitoring", {})
+    hours = monitoring_cfg.get("weekly_summary_window_hours", 168)
+
+    db = SessionLocal()
+    try:
+        summary = monitoring.build_weekly_summary(db, hours=hours)
+    finally:
+        db.close()
+
+    embed = discord_notifier.build_weekly_summary_embed(summary)
+    ok = discord_notifier.send_ping(get_settings().discord_webhook_url, embed)
+    print(f"[SCHEDULER] weekly summary posted: {ok}")
 
 
 def start_scheduler() -> None:
@@ -210,6 +226,17 @@ def start_scheduler() -> None:
             replace_existing=True,
         )
         print("[SCHEDULER] daily summary enabled, posting every 24h")
+
+    if monitoring_cfg.get("weekly_summary_enabled", True):
+        scheduler.add_job(
+            post_weekly_summary,
+            IntervalTrigger(hours=168),
+            id="post_weekly_summary",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        print("[SCHEDULER] weekly summary enabled, posting every 168h")
 
     scheduler.start()
     print(f"[SCHEDULER] started, polling every {interval_minutes}m")

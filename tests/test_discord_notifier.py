@@ -1,5 +1,12 @@
 from app import models
-from app.discord_notifier import build_matched_embed, build_summary_embed, build_unverified_embed, record_ping, should_ping
+from app.discord_notifier import (
+    build_matched_embed,
+    build_summary_embed,
+    build_unverified_embed,
+    build_weekly_summary_embed,
+    record_ping,
+    should_ping,
+)
 from app.decision.engine import ScoreResult, Verdict
 
 
@@ -116,3 +123,26 @@ def test_build_summary_embed_no_deals_in_window():
     summary = {"hours": 24, "by_source": {}, "keepa_tokens": {"total_consumed": 0, "by_stage": {}}}
     embed = build_summary_embed(summary)
     assert embed["fields"][0]["value"] == "No deals seen in this window."
+
+
+def _weekly_summary(avg_realised, avg_predicted, outcomes=1) -> dict:
+    return {
+        "hours": 168, "pings": 5, "purchases_logged": 2, "outcomes_recorded": outcomes,
+        "avg_realised_roi": avg_realised, "avg_predicted_roi": avg_predicted,
+    }
+
+
+def test_build_weekly_summary_embed_outperforming_is_green():
+    embed = build_weekly_summary_embed(_weekly_summary(avg_realised=0.6, avg_predicted=0.4))
+    assert embed["color"] == 0x2ECC71
+
+
+def test_build_weekly_summary_embed_underperforming_is_amber():
+    embed = build_weekly_summary_embed(_weekly_summary(avg_realised=0.2, avg_predicted=0.5))
+    assert embed["color"] == 0xF1C40F
+
+
+def test_build_weekly_summary_embed_no_outcomes_is_green():
+    embed = build_weekly_summary_embed(_weekly_summary(avg_realised=None, avg_predicted=None, outcomes=0))
+    assert embed["color"] == 0x2ECC71
+    assert embed["fields"][2]["value"] == "0"

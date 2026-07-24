@@ -96,3 +96,24 @@ def test_post_daily_summary_passes_config_through_to_embed_and_posts(monkeypatch
     assert build_summary_calls == [12]
     assert embed_calls == [({"fake": "summary"}, 999)]
     assert send_calls == [("https://discord.example/hook", {"title": "fake embed"})]
+
+
+def test_post_weekly_summary_passes_config_through_to_embed_and_posts(monkeypatch):
+    app_cfg = {"monitoring": {"weekly_summary_window_hours": 72}}
+    monkeypatch.setattr(scheduler, "get_config", lambda: app_cfg)
+    monkeypatch.setattr(scheduler, "get_settings", lambda: type("S", (), {"discord_webhook_url": "https://discord.example/hook"})())
+
+    build_weekly_calls = []
+    monkeypatch.setattr(monitoring, "build_weekly_summary", lambda db, hours: build_weekly_calls.append(hours) or {"fake": "weekly"})
+
+    embed_calls = []
+    monkeypatch.setattr(discord_notifier, "build_weekly_summary_embed", lambda summary: embed_calls.append(summary) or {"title": "fake weekly embed"})
+
+    send_calls = []
+    monkeypatch.setattr(discord_notifier, "send_ping", lambda url, embed: send_calls.append((url, embed)) or True)
+
+    scheduler.post_weekly_summary()
+
+    assert build_weekly_calls == [72]
+    assert embed_calls == [{"fake": "weekly"}]
+    assert send_calls == [("https://discord.example/hook", {"title": "fake weekly embed"})]

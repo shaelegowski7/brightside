@@ -150,6 +150,36 @@ def build_summary_embed(summary: dict, token_budget_alert: int | None = None) ->
     return embed
 
 
+def build_weekly_summary_embed(summary: dict) -> dict:
+    """Business-facing weekly digest (spec phase 3: "weekly Discord summary
+    (hit rate, realised vs predicted ROI)") -- direct sibling of
+    build_summary_embed, but flags underperformance vs predictions rather
+    than Keepa token budget. See monitoring.build_weekly_summary for the
+    data shape."""
+    outcomes = summary["outcomes_recorded"]
+    avg_realised = summary["avg_realised_roi"]
+    avg_predicted = summary["avg_predicted_roi"]
+    underperforming = (
+        outcomes > 0 and avg_realised is not None and avg_predicted is not None and avg_realised < avg_predicted
+    )
+
+    def _pct(v):
+        return f"{v:.0%}" if v is not None else "—"
+
+    fields = [
+        _field("Pings this week", str(summary["pings"])),
+        _field("Purchases logged", str(summary["purchases_logged"])),
+        _field("Outcomes recorded", str(outcomes)),
+        _field("Avg realised ROI", _pct(avg_realised)),
+        _field("Avg predicted ROI", _pct(avg_predicted)),
+    ]
+    return {
+        "title": f"Weekly summary — last {summary['hours']}h",
+        "color": COLOR_AMBER if underperforming else COLOR_GREEN,
+        "fields": fields,
+    }
+
+
 def send_ping(webhook_url: str, embed: dict) -> bool:
     try:
         resp = requests.post(webhook_url, json={"embeds": [embed]}, timeout=_TIMEOUT_SECONDS)

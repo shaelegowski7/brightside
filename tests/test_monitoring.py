@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from app import models, monitoring
 
 
@@ -71,3 +73,59 @@ def test_build_summary_shape(db_session):
     assert "by_source" in summary
     assert "keepa_tokens" in summary
     assert summary["keepa_tokens"]["total_consumed"] == 0
+
+
+def _scored_purchase(db_session, ts: datetime, roi: float, actual_buy_price: int) -> models.Purchase:
+    product = models.Product(ean=None, asin=f"B{ts.timestamp()}", matched_via="amazon_url", confidence="high")
+    db_session.add(product)
+    db_session.commit()
+    deal = models.Deal(source="hotukdeals", title="t", url=f"https://x/{ts.timestamp()}", buy_price=actual_buy_price, status="pinged", product_id=product.id)
+    db_session.add(deal)
+    db_session.commit()
+    score = models.Score(deal_id=deal.id, verdict="PASS", roi=roi)
+    db_session.add(score)
+    db_session.commit()
+    purchase = models.Purchase(score_id=score.id, qty=1, actual_buy_price=actual_buy_price, ts=ts)
+    db_session.add(purchase)
+    db_session.commit()
+    db_session.refresh(purchase)
+    return purchase
+
+
+def test_purchases_outcomes_summary_computes_realised_and_predicted_roi(db_session):
+    now = datetime.now(timezone.utc)
+    purchase = _scored_purchase(db_session, now, roi=0.5, actual_buy_price=1000)
+    db_session.add(models.Outcome(purchase_id=purchase.id, sold_price=2000, sold_date=now, actual_fees=300))
+    db_session.commit()
+
+    result = monitoring.purchases_outcomes_summary(db_session, since=now - timedelta(hours=1), until=now + timedelta(hours=1))
+
+    assert result["outcomes_recorded"] == 1
+    assert result["purchases_logged"] == 1
+    # (2000 - 300 - 1000) / 1000 = 0.7
+    assert result["avg_realised_roi"] == pytest.approx(0.7)
+    assert result["avg_predicted_roi"] == pytest.approx(0.5)
+
+
+def test_purchases_outcomes_summary_excludes_outside_window(db_session):
+    now = datetime.now(timezone.utc)
+    purchase = _scored_purchase(db_session, now - timedelta(days=10), roi=0.5, actual_buy_price=1000)
+    db_session.add(models.Outcome(purchase_id=purchase.id, sold_price=2000, sold_date=now - timedelta(days=10), actual_fees=300))
+    db_session.commit()
+
+    result = monitoring.purchases_outcomes_summary(db_session, since=now - timedelta(hours=1), until=now + timedelta(hours=1))
+
+    assert result["outcomes_recorded"] == 0
+    assert result["avg_realised_roi"] is None
+    assert result["avg_predicted_roi"] is None
+
+
+def test_build_weekly_summary_counts_pings(db_session):
+    now = datetime.now(timezone.utc)
+    db_session.add(models.Ping(asin="B000TEST", deal_id=1, score_id=1, ts=now))
+    db_session.commit()
+
+    summary = monitoring.build_weekly_summary(db_session, hours=168)
+
+    assert summary["pings"] == 1
+    assert summary["outcomes_recorded"] == 0

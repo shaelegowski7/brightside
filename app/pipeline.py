@@ -17,7 +17,7 @@ synchronous scan-and-verdict flow.
 """
 from sqlalchemy.orm import Session
 
-from . import discord_notifier, keepa_client, models, resolver
+from . import discord_notifier, keepa_client, models, resolver, spapi_client
 from .config import get_settings
 from .decision.engine import DecisionConfig, ScoreInput, Verdict, score_deal
 from .matching import amazon_url, cache, jsonld, model_number, title_search_cache, title_validate
@@ -58,6 +58,15 @@ _ALWAYS_RETRIABLE_SOURCES = {"pokemon_center"}
 # an "UNVERIFIED MATCH" Discord post with no ROI/price scoring, same as
 # before this pipeline started dropping ordinary no-match deals.
 _UNMATCHABLE_BY_DESIGN_SOURCES = {"pokemon_center"}
+
+# Sources with no independent deal title to validate a match against (Phase
+# 2 /scan -- see app/scan.py). Title validation exists to catch a wrong EAN
+# scraped from the wrong place on a retailer page; a barcode scan has no
+# such risk -- the scanned EAN *is* the ground truth for the physical item
+# in the user's hand, there's nothing independent to cross-check it
+# against. Without this, every scan would spuriously fail title validation
+# against its own placeholder title.
+_SKIP_TITLE_VALIDATION_SOURCES = {"scan"}
 
 
 def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_provider: FeeProvider, app_cfg: dict) -> None:
@@ -133,8 +142,13 @@ def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_pr
     # Title/brand validation (Fix Build Guide phase 2) -- only meaningful
     # where the Amazon title is independent evidence. amazon_url matches
     # have no independent title to check against (the ASIN came straight
-    # from the deal's own resolved Amazon URL), so skip those.
-    if matched_via in ("jsonld", "title_search") and not title_validate.titles_plausibly_match(deal.title, product.title):
+    # from the deal's own resolved Amazon URL), so skip those -- likewise
+    # _SKIP_TITLE_VALIDATION_SOURCES (scans, see that set's docstring).
+    if (
+        matched_via in ("jsonld", "title_search")
+        and raw.source not in _SKIP_TITLE_VALIDATION_SOURCES
+        and not title_validate.titles_plausibly_match(deal.title, product.title)
+    ):
         deal.status = "title_mismatch"
         db.commit()
         print(f"[PIPELINE] {product.asin}: title mismatch ({deal.title!r} vs {product.title!r}), dropping")
@@ -166,7 +180,16 @@ def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_pr
         print(f"[PIPELINE] {product.asin}: stage2 returned no data")
         return
 
-    score = _score_and_record(db, deal, product, stage2, decision_cfg, fee_provider)
+    # Phase 2, dormant until spapi_client.is_configured() (no Pro-seller
+    # account yet -- see pricing/fees.py's module docstring). Computed once
+    # here and threaded through both scoring and the Discord embed below so
+    # they can never disagree. Deliberately not checked in stage1_screen_
+    # passes -- that's the high-volume cheap screen; hitting SP-API's
+    # rate-limited gating check there would be wasteful for deals stage 1
+    # would reject anyway.
+    gated = spapi_client.check_gating(db, product.asin) if spapi_client.is_configured() else None
+
+    score = _score_and_record(db, deal, product, stage2, decision_cfg, fee_provider, gated)
     deal.status = "stage2_scored"
     db.commit()
 
@@ -184,8 +207,12 @@ def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_pr
         return
 
     result = ScoreResultView(score)
+    # Scans have no real title of their own (the PWA only knows an EAN +
+    # price) -- deal.title is just a placeholder, use the real Keepa title
+    # instead so scan pings don't show "Scanned item (EAN ...)" in Discord.
+    embed_title = product.title if raw.source == "scan" and product.title else deal.title
     embed = discord_notifier.build_matched_embed(
-        title=deal.title,
+        title=embed_title,
         retailer_url=deal.retailer_url,
         image_url=deal.image_url,
         retailer=deal.retailer,
@@ -195,7 +222,7 @@ def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_pr
         est_monthly_sales=stage2.est_monthly_sales,
         offer_count=stage2.fba_offer_count,
         amazon_on_listing=stage2.amazon_on_listing,
-        gated=None,
+        gated=gated,
         match_confidence=product.confidence,
     )
     sent = discord_notifier.send_ping(get_settings().discord_webhook_url, embed)
@@ -316,6 +343,7 @@ def _score_and_record(
     stage2: "keepa_client.Stage2Result",
     decision_cfg: DecisionConfig,
     fee_provider: FeeProvider,
+    gated: bool | None,
 ) -> models.Score:
     dims = None
     if stage2.package_weight_kg and stage2.package_longest_cm and stage2.package_dims_sum_cm:
@@ -324,6 +352,7 @@ def _score_and_record(
     fees = fee_provider.get_fees(
         stage2.category or "", price_for_fees, dims,
         stage2.fba_fulfilment_fee_pence, stage2.referral_fee_percentage,
+        asin=product.asin,
     )
     oversize = fee_provider.classify_size_tier(dims) == "oversize"
 
@@ -348,7 +377,7 @@ def _score_and_record(
         rank_history_days=stage2.rank_history_days,
         hazmat=stage2.hazmat,
         oversize=oversize,
-        gated=None,   # not checked — no SP-API yet
+        gated=gated,
         category_rank_percentile=category_rank_percentile,
     )
     result = score_deal(score_input, decision_cfg)
@@ -363,7 +392,7 @@ def _score_and_record(
         est_monthly_sales=stage2.est_monthly_sales,
         offer_count=stage2.fba_offer_count,
         amazon_on_listing=stage2.amazon_on_listing,
-        gated=None,
+        gated=gated,
         flags_json=result.flags,
         verdict=result.verdict.value,
         verdict_reason=result.verdict_reason,

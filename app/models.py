@@ -162,6 +162,67 @@ class CategorySize(Base):
     fetched_at = Column(DateTime(timezone=True), default=utcnow)
 
 
+class Purchase(Base):
+    """Manual purchase log (spec phase 3) -- feeds the review workflow.
+    score_id ties a purchase to the exact decision-engine snapshot it was
+    bought against. Users only ever see an ASIN (Discord embed links), never
+    a raw score_id -- app/purchases.py resolves ASIN -> most recent Score
+    server-side so callers never need to know this id."""
+
+    __tablename__ = "purchases"
+
+    id = Column(Integer, primary_key=True, index=True)
+    score_id = Column(Integer, ForeignKey("scores.id"), nullable=False, index=True)
+    qty = Column(Integer, nullable=False)
+    actual_buy_price = Column(Integer, nullable=False)   # pence, per unit -- mirrors deals.buy_price
+    notes = Column(String, nullable=True)
+    ts = Column(DateTime(timezone=True), default=utcnow)
+
+
+class Outcome(Base):
+    """Manual sale outcome log (spec phase 3). purchase_id is the PK (no
+    separate id column) -- matches the spec's literal schema, one outcome
+    per purchase (full quantity sold together, not partial/repeat sales).
+    Feeds monitoring.purchases_outcomes_summary's realised-vs-predicted ROI
+    comparison -- the whole point of logging this at all (see scores.roi,
+    the immutable prediction this gets checked against)."""
+
+    __tablename__ = "outcomes"
+
+    purchase_id = Column(Integer, ForeignKey("purchases.id"), primary_key=True)
+    sold_price = Column(Integer, nullable=False)   # pence, per unit -- mirrors scores.sell_price
+    sold_date = Column(DateTime(timezone=True), nullable=False)
+    actual_fees = Column(Integer, nullable=True)   # pence
+    notes = Column(String, nullable=True)
+
+
+class FeeEstimateCache(Base):
+    """SP-API getMyFeesEstimate cache (Phase 2, dormant until spapi_client.
+    is_configured()) -- spec: "Cache fee estimates per (ASIN, price-band)
+    for 24h." price_band_pence buckets to the nearest 100p so near-identical
+    prices reuse a cache hit instead of spending an SP-API call each time."""
+
+    __tablename__ = "spapi_fee_cache"
+
+    asin = Column(String, primary_key=True)
+    price_band_pence = Column(Integer, primary_key=True)
+    referral_fee_pence = Column(Integer, nullable=False)
+    fba_fulfilment_fee_pence = Column(Integer, nullable=False)
+    fetched_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+class GatingCache(Base):
+    """SP-API getListingsRestrictions cache (Phase 2, dormant until
+    spapi_client.is_configured()) -- spec: "Cache gating results per ASIN
+    for 7 days." """
+
+    __tablename__ = "spapi_gating_cache"
+
+    asin = Column(String, primary_key=True)
+    gated = Column(Boolean, nullable=False)
+    fetched_at = Column(DateTime(timezone=True), default=utcnow)
+
+
 class TokenLog(Base):
     """One row per Keepa API call. Kept indefinitely for the first two weeks
     per the spec to validate the token-budget estimates; cheap enough to

@@ -229,6 +229,12 @@ pokemon_center:
 monitoring:
   daily_summary_enabled: true
   summary_window_hours: 24
+  # Weekly business digest (spec phase 3): hit rate + realised-vs-predicted
+  # ROI from purchases/outcomes logging. Defaults on -- posts zeros before
+  # anything's been logged yet, same precedent as shipping other sources
+  # enabled before they had real data flowing.
+  weekly_summary_enabled: true
+  weekly_summary_window_hours: 168
   # Spec baseline: ~500-1300 tokens/day normally, 2000-4500 on store-run
   # days, ~28800/day base-tier ceiling. Set above the widened-volume
   # baseline but comfortably below the hard ceiling so an alert means

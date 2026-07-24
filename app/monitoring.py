@@ -51,6 +51,61 @@ def keepa_token_summary(db: Session, since: datetime) -> dict:
     }
 
 
+def purchases_outcomes_summary(db: Session, since: datetime, until: datetime) -> dict:
+    """Joins Outcome -> Purchase -> Score. Windowed on Outcome.sold_date (no
+    separate "logged at" timestamp exists on outcomes -- see models.py's
+    Outcome docstring) -- fine for a personal tool logged promptly.
+    avg_realised_roi uses the spec's exact formula: (sold_price -
+    actual_fees - actual_buy_price) / actual_buy_price. avg_predicted_roi is
+    scores.roi as persisted at ping time, via each outcome's purchase. Both
+    are None (not a ZeroDivisionError) when nothing's been logged yet."""
+    rows = (
+        db.query(models.Outcome, models.Purchase, models.Score)
+        .join(models.Purchase, models.Outcome.purchase_id == models.Purchase.id)
+        .join(models.Score, models.Purchase.score_id == models.Score.id)
+        .filter(models.Outcome.sold_date >= since, models.Outcome.sold_date < until)
+        .all()
+    )
+    realised_rois = []
+    predicted_rois = []
+    for outcome, purchase, score in rows:
+        fees = outcome.actual_fees or 0
+        if purchase.actual_buy_price:
+            realised_rois.append((outcome.sold_price - fees - purchase.actual_buy_price) / purchase.actual_buy_price)
+        if score.roi is not None:
+            predicted_rois.append(score.roi)
+
+    purchases_logged = (
+        db.query(func.count(models.Purchase.id))
+        .filter(models.Purchase.ts >= since, models.Purchase.ts < until)
+        .scalar() or 0
+    )
+
+    return {
+        "outcomes_recorded": len(rows),
+        "purchases_logged": purchases_logged,
+        "avg_realised_roi": (sum(realised_rois) / len(realised_rois)) if realised_rois else None,
+        "avg_predicted_roi": (sum(predicted_rois) / len(predicted_rois)) if predicted_rois else None,
+    }
+
+
+def build_weekly_summary(db: Session, hours: int = 168) -> dict:
+    until = datetime.now(timezone.utc)
+    since = until - timedelta(hours=hours)
+    pings = (
+        db.query(func.count(models.Ping.id))
+        .filter(models.Ping.ts >= since, models.Ping.ts < until)
+        .scalar() or 0
+    )
+    return {
+        "since": since.isoformat(),
+        "until": until.isoformat(),
+        "hours": hours,
+        "pings": pings,
+        **purchases_outcomes_summary(db, since, until),
+    }
+
+
 def build_summary(db: Session, hours: int = 24) -> dict:
     until = datetime.now(timezone.utc)
     since = until - timedelta(hours=hours)

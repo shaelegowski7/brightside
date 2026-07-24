@@ -103,6 +103,85 @@ def test_amazon_url_match_full_pass_pings_and_records(db_session, monkeypatch):
     assert ping.deal_id == deal.id
     assert len(sent_embeds) == 1
 
+    # SP-API unconfigured (Phase 2, dormant, no real creds in this env) ->
+    # gated must stay None, same as before that wiring existed.
+    assert score.gated is None
+
+
+def test_gated_true_rejects_end_to_end(db_session, monkeypatch):
+    """Phase 2: when spapi_client is configured and reports gated=True, the
+    deal must REJECT via decision/engine.py's existing hard filter (`if
+    inp.gated is True: return _reject("gated", ...)`) -- proves the pipeline
+    wiring reaches all the way through, not just that a field gets set."""
+    raw = RawDeal(
+        source="hotukdeals", retailer="Amazon", title="Widget Deal",
+        url="https://www.hotukdeals.com/deals/widget-deal-gated",
+        buy_price_pence=1000, image_url=None,
+    )
+    monkeypatch.setattr(resolver, "resolve", lambda url, key="": resolver.ResolvedDeal(
+        final_url="https://www.amazon.co.uk/dp/B000GATED1?tag=x", html="<html></html>",
+        status_code=200, blocked=False,
+    ))
+    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean: {
+        "B000GATED1": keepa_client.Stage1Result(
+            asin="B000GATED1", title="Widget", category="Toys & Games",
+            sales_rank=20000, est_sell_price_pence=2400, rank_history_days=200,
+        )
+    })
+    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins: {
+        "B000GATED1": _stage2(asin="B000GATED1"),
+    })
+    import app.spapi_client as spapi_client
+    monkeypatch.setattr(spapi_client, "is_configured", lambda: True)
+    monkeypatch.setattr(spapi_client, "check_gating", lambda db, asin: True)
+
+    sent_embeds = []
+    import app.discord_notifier as dn
+    monkeypatch.setattr(dn, "send_ping", lambda webhook_url, embed: sent_embeds.append(embed) or True)
+
+    pipeline.process_deal(db_session, raw, _decision_cfg(), _fee_provider(), _APP_CFG)
+
+    deal = db_session.query(models.Deal).filter(models.Deal.url == raw.url).first()
+    assert deal.status == "stage2_scored"   # reached scoring; the score itself is a REJECT
+    score = db_session.query(models.Score).filter(models.Score.deal_id == deal.id).first()
+    assert score.verdict == "REJECT"
+    assert score.verdict_reason == "gated"
+    assert score.gated is True
+    assert len(sent_embeds) == 0
+
+
+def test_scan_source_skips_title_validation(db_session, monkeypatch):
+    """A scan's deal.title is just an EAN placeholder (see app/scan.py) --
+    it must never be compared against the real Keepa title, unlike an
+    ordinary HUKD/Argos scrape (see test_title_mismatch_rejects_wrong_
+    product just above, which still enforces the check)."""
+    ean = "5901234123457"
+    raw = RawDeal(
+        source="scan", retailer=None, title=f"Scanned item (EAN {ean})",
+        url=f"scan:{ean}:abc123", buy_price_pence=1000, image_url=None,
+        html=f'<script type="application/ld+json">{{"@type":"Product","gtin13":"{ean}"}}</script>',
+    )
+    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean: {
+        codes[0]: keepa_client.Stage1Result(
+            asin="B000SCAN01", title="Completely Unrelated Product Name",
+            category="Toys & Games", sales_rank=20000, est_sell_price_pence=2400, rank_history_days=200,
+        )
+    })
+    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins: {
+        "B000SCAN01": _stage2(asin="B000SCAN01"),
+    })
+    sent_embeds = []
+    import app.discord_notifier as dn
+    monkeypatch.setattr(dn, "send_ping", lambda webhook_url, embed: sent_embeds.append(embed) or True)
+
+    pipeline.process_deal(db_session, raw, _decision_cfg(), _fee_provider(), _APP_CFG)
+
+    deal = db_session.query(models.Deal).filter(models.Deal.url == raw.url).first()
+    assert deal.status != "title_mismatch"
+    assert deal.status == "pinged"
+    # the embed title uses the real Keepa title, not the EAN placeholder
+    assert sent_embeds[0]["title"] == "Completely Unrelated Product Name"
+
 
 def test_no_match_found_drops_silently_without_keepa_call(db_session, monkeypatch):
     """Fix Build Guide phase 2: no EAN/ASIN/title-search match -> dropped

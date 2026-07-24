@@ -8,6 +8,8 @@ _tmp_dir = tempfile.mkdtemp(prefix="fba_test_")
 os.environ.setdefault("DATABASE_URL", f"sqlite:///{_tmp_dir}/test.db")
 os.environ.setdefault("KEEPA_API_KEY", "test")
 os.environ.setdefault("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/test/test")
+os.environ.setdefault("PWA_SHARED_SECRET", "test-shared-secret")
+os.environ.setdefault("PWA_ORIGIN", "https://pwa.example.com")
 
 import pytest  # noqa: E402
 
