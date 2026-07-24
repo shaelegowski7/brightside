@@ -12,8 +12,11 @@ from .database import SessionLocal
 from .decision.engine import DecisionConfig
 from .pricing import fees
 from .sources.argos import ArgosAdapter
+from .sources.bq import BQAdapter
+from .sources.homebargains import HomeBargainsAdapter
 from .sources.hotukdeals import HotUKDealsAdapter
 from .sources.pokemon_center import PokemonCenterAdapter
+from .sources.screwfix import ScrewfixAdapter
 from .sources.smyths import SmythsAdapter
 
 scheduler = BackgroundScheduler()
@@ -99,6 +102,87 @@ def poll_smyths_clearance() -> None:
     try:
         count = adapter.crawl(db, on_deal=_on_deal)
         print(f"[SCHEDULER] smyths: {count} new/changed item(s)")
+    finally:
+        db.close()
+
+
+def poll_bq_clearance() -> None:
+    app_cfg = get_config()
+    bq_cfg = app_cfg.get("bq", {})
+    decision_cfg = DecisionConfig.from_app_config(app_cfg)
+    adapter = BQAdapter(
+        category_urls=bq_cfg["category_urls"],
+        min_delay_s=bq_cfg["min_delay_seconds"],
+        max_delay_s=bq_cfg["max_delay_seconds"],
+    )
+
+    db = SessionLocal()
+    fee_provider = fees.build_fee_provider(db, app_cfg)
+
+    def _on_deal(raw) -> None:
+        try:
+            pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
+        except Exception as e:
+            db.rollback()
+            print(f"[SCHEDULER] {raw.url}: processing error: {e}")
+
+    try:
+        count = adapter.crawl(db, on_deal=_on_deal)
+        print(f"[SCHEDULER] bq: {count} new/changed item(s)")
+    finally:
+        db.close()
+
+
+def poll_screwfix_clearance() -> None:
+    app_cfg = get_config()
+    screwfix_cfg = app_cfg.get("screwfix", {})
+    decision_cfg = DecisionConfig.from_app_config(app_cfg)
+    adapter = ScrewfixAdapter(
+        category_urls=screwfix_cfg["category_urls"],
+        min_delay_s=screwfix_cfg["min_delay_seconds"],
+        max_delay_s=screwfix_cfg["max_delay_seconds"],
+    )
+
+    db = SessionLocal()
+    fee_provider = fees.build_fee_provider(db, app_cfg)
+
+    def _on_deal(raw) -> None:
+        try:
+            pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
+        except Exception as e:
+            db.rollback()
+            print(f"[SCHEDULER] {raw.url}: processing error: {e}")
+
+    try:
+        count = adapter.crawl(db, on_deal=_on_deal)
+        print(f"[SCHEDULER] screwfix: {count} new/changed item(s)")
+    finally:
+        db.close()
+
+
+def poll_homebargains_clearance() -> None:
+    app_cfg = get_config()
+    hb_cfg = app_cfg.get("homebargains", {})
+    decision_cfg = DecisionConfig.from_app_config(app_cfg)
+    adapter = HomeBargainsAdapter(
+        category_urls=hb_cfg["category_urls"],
+        min_delay_s=hb_cfg["min_delay_seconds"],
+        max_delay_s=hb_cfg["max_delay_seconds"],
+    )
+
+    db = SessionLocal()
+    fee_provider = fees.build_fee_provider(db, app_cfg)
+
+    def _on_deal(raw) -> None:
+        try:
+            pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
+        except Exception as e:
+            db.rollback()
+            print(f"[SCHEDULER] {raw.url}: processing error: {e}")
+
+    try:
+        count = adapter.crawl(db, on_deal=_on_deal)
+        print(f"[SCHEDULER] homebargains: {count} new/changed item(s)")
     finally:
         db.close()
 
@@ -201,6 +285,45 @@ def start_scheduler() -> None:
             replace_existing=True,
         )
         print(f"[SCHEDULER] smyths clearance enabled, polling every {smyths_interval}m")
+
+    bq_cfg = app_cfg.get("bq", {})
+    if bq_cfg.get("enabled", False):
+        bq_interval = bq_cfg["poll_interval_minutes"]
+        scheduler.add_job(
+            poll_bq_clearance,
+            IntervalTrigger(minutes=bq_interval),
+            id="poll_bq_clearance",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        print(f"[SCHEDULER] bq clearance enabled, polling every {bq_interval}m")
+
+    screwfix_cfg = app_cfg.get("screwfix", {})
+    if screwfix_cfg.get("enabled", False):
+        screwfix_interval = screwfix_cfg["poll_interval_minutes"]
+        scheduler.add_job(
+            poll_screwfix_clearance,
+            IntervalTrigger(minutes=screwfix_interval),
+            id="poll_screwfix_clearance",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        print(f"[SCHEDULER] screwfix clearance enabled, polling every {screwfix_interval}m")
+
+    hb_cfg = app_cfg.get("homebargains", {})
+    if hb_cfg.get("enabled", False):
+        hb_interval = hb_cfg["poll_interval_minutes"]
+        scheduler.add_job(
+            poll_homebargains_clearance,
+            IntervalTrigger(minutes=hb_interval),
+            id="poll_homebargains_clearance",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        print(f"[SCHEDULER] homebargains clearance enabled, polling every {hb_interval}m")
 
     pc_cfg = app_cfg.get("pokemon_center", {})
     if pc_cfg.get("enabled", False):

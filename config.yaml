@@ -193,6 +193,63 @@ smyths:
   category_urls:
     - "https://www.smythstoys.com/uk/en-gb/sale"
 
+# B&Q (diy.com) clearance scraper. No ScraperAPI needed -- confirmed live
+# 2026-07-24 that diy.com serves full content to a plain request, no bot
+# protection detected (see app/sources/bq.py's module docstring for the full
+# recon writeup). The listing page's own JSON-LD ItemList carries title,
+# price, url AND a real EAN/GTIN (`sku` field, 8 or 13 digits) directly, so
+# unlike Argos/Smyths this needs no second per-product fetch at all --
+# cheapest of every scraper source in this file. `?page=N` pagination
+# confirmed working; clearance.cat alone had 851 items (~18 pages) at the
+# time this was checked.
+bq:
+  enabled: true
+  poll_interval_minutes: 180
+  min_delay_seconds: 3
+  max_delay_seconds: 8
+  category_urls:
+    - "https://www.diy.com/clearance.cat"
+    - "https://www.diy.com/clearance/electrical-clearance.cat"
+    - "https://www.diy.com/clearance/tools-equipment-clearance.cat"
+    - "https://www.diy.com/clearance/home-furniture-clearance.cat"
+    - "https://www.diy.com/clearance/outdoor-garden-clearance.cat"
+    - "https://www.diy.com/clearance/kitchens-clearance.cat"
+
+# Screwfix clearance scraper. No ScraperAPI needed -- confirmed live
+# 2026-07-24, no bot protection detected. The clearance *landing* page is
+# just a CMS hub with no product data; the real paginated listing is the
+# search-results page for "clearancepromo" instead (see app/sources/
+# screwfix.py's module docstring). No EAN anywhere on this site -- every
+# match falls through to the title-search fallback. Pagination beyond page 1
+# is UNCONFIRMED (neither &offset= nor &page= advanced the result set in
+# testing) -- capped at one page per search term until the real mechanism is
+# found, so this under-covers rather than risks 0-item pages silently.
+screwfix:
+  enabled: true
+  poll_interval_minutes: 180
+  min_delay_seconds: 3
+  max_delay_seconds: 8
+  category_urls:
+    - "https://www.screwfix.com/search?search=clearancepromo"
+    - "https://www.screwfix.com/search?search=summersalepromo"
+
+# Home Bargains clearance/offers scraper. No ScraperAPI needed -- confirmed
+# live 2026-07-24, no bot protection detected. IMPORTANT: category_urls must
+# point at the home.bargains short domain, NOT www.homebargains.co.uk --
+# every path on the www host 301s to home.bargains's bare root regardless of
+# the original path (see app/sources/homebargains.py's module docstring). No
+# EAN anywhere on this site -- every match falls through to the title-search
+# fallback. Pagination beyond page 1 is UNCONFIRMED (a `?page=2` param left
+# the embedded currentPage at 1 in testing) -- capped at one page per
+# category_url until the real mechanism is found.
+homebargains:
+  enabled: true
+  poll_interval_minutes: 180
+  min_delay_seconds: 3
+  max_delay_seconds: 8
+  category_urls:
+    - "https://home.bargains/category/999/starbuys"
+
 # Pokemon Center UK restock/new-release monitor (Phase 3). Different signal
 # than Argos: a "drop" is a stock-status transition, not a price change (see
 # app/sources/pokemon_center.py). No EAN on this site at all, and no Keepa
