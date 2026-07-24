@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -sS -o /tmp/hukd_test.xml -w \"HTTP_STATUS:%{http_code}\\\\n\" -A \"Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/124.0 Safari/537.36\" \"https://www.hotukdeals.com/rss/trending\" --max-time 15)",
+      "Bash(python3 -c ' *)",
+      "Bash(grep -o '<item>.\\\\{0,600\\\\}')",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/ -q)",
+      "Bash(curl -sS -A 'Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/124.0 Safari/537.36' https://www.smythstoys.com/robots.txt --max-time 15 -w '\\\\nstatus:%{http_code}\\\\n')",
+      "Bash(curl -sS -A 'Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/124.0 Safari/537.36' https://www.smythstoys.com/sitemap.xml --max-time 15 -w '\\\\nstatus:%{http_code}\\\\n')",
+      "Bash(timeout 30 curl -sS -A 'Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/124.0 Safari/537.36' 'http://web.archive.org/cdx/search/cdx?url=smythstoys.com/uk/en-gb/*&output=json&limit=30&filter=statuscode:200&from=2025&to=2026&fl=timestamp,original,length' --max-time 25 -o /c/Users/shael/AppData/Local/Temp/claude/c--Users-shael-brightside/f54c90f5-0cfe-498e-aaf5-ab536efd73aa/scratchpad/smyths_quick_cdx.json)",
+      "Read(//c/Users/shael/AppData/Local/Temp/claude/c--Users-shael-brightside/f54c90f5-0cfe-498e-aaf5-ab536efd73aa/scratchpad/**)",
+      "Bash(curl -sSL -A 'Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/124.0 Safari/537.36' http://web.archive.org/web/20250520164612id_/https://www.smythstoys.com/uk/en-gb --max-time 30 -o /c/Users/shael/AppData/Local/Temp/claude/c--Users-shael-brightside/f54c90f5-0cfe-498e-aaf5-ab536efd73aa/scratchpad/smyths_home.html)",
+      "Bash(curl -sSL --compressed -A 'Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/124.0 Safari/537.36' http://web.archive.org/web/20250520164612id_/https://www.smythstoys.com/uk/en-gb --max-time 30 -o /c/Users/shael/AppData/Local/Temp/claude/c--Users-shael-brightside/f54c90f5-0cfe-498e-aaf5-ab536efd73aa/scratchpad/smyths_home2.html)",
+      "Bash(python3)",
+      "Bash(curl -sS -A 'Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/124.0 Safari/537.36' https://archive.org/wayback/available?url=smythstoys.com/uk/en-gb/toys/action-figures-and-playsets/roblox/roblox-action-figures-and-vehicles/dress-to-impress-dolls-mystery-model/p/247098 --max-time 15)",
+      "Bash(curl -sS -A 'Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/124.0 Safari/537.36' 'http://web.archive.org/cdx/search/cdx?url=smythstoys.com/uk/en-gb/*/p/*&output=json&limit=50&filter=statuscode:200&from=2025&to=2026&fl=timestamp,original,length' --max-time 40 -o /c/Users/shael/AppData/Local/Temp/claude/c--Users-shael-brightside/f54c90f5-0cfe-498e-aaf5-ab536efd73aa/scratchpad/smyths_prod_cdx.json)",
+      "Bash(curl -sSL --compressed -A 'Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/124.0 Safari/537.36' http://web.archive.org/web/20250417020336id_/https://www.smythstoys.com/uk/en-gb/toys/action-figures-and-playsets/roblox/roblox-action-figures-and-vehicles/dress-to-impress-dolls-mystery-model/p/247098 --max-time 30 -o /c/Users/shael/AppData/Local/Temp/claude/c--Users-shael-brightside/f54c90f5-0cfe-498e-aaf5-ab536efd73aa/scratchpad/smyths_product.html)",
+      "Bash(curl -sS -A 'Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/124.0 Safari/537.36' 'http://web.archive.org/cdx/search/cdx?url=smythstoys.com/uk/en-gb/sale*&output=json&limit=50&filter=statuscode:200&from=2025&to=2026&fl=timestamp,original,length' --max-time 40 -o /c/Users/shael/AppData/Local/Temp/claude/c--Users-shael-brightside/f54c90f5-0cfe-498e-aaf5-ab536efd73aa/scratchpad/smyths_sale_cdx.json)",
+      "Bash(curl -sSL --compressed -A 'Mozilla/5.0 \\(Windows NT 10.0; Win64; x64\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/124.0 Safari/537.36' http://web.archive.org/web/20260211114641id_/https://www.smythstoys.com/uk/en-gb/outdoor --max-time 30 -o /c/Users/shael/AppData/Local/Temp/claude/c--Users-shael-brightside/f54c90f5-0cfe-498e-aaf5-ab536efd73aa/scratchpad/smyths_category.html)",
+      "Bash(DATABASE_URL=sqlite:///:memory: .venv/Scripts/python.exe -c ' *)",
+      "Bash(DATABASE_URL=sqlite:///:memory: DISCORD_WEBHOOK_URL=https://discord.example/hook .venv/Scripts/python.exe -c ' *)",
+      "Bash(rm -f /c/Users/shael/AppData/Local/Temp/claude/c--Users-shael-brightside/f54c90f5-0cfe-498e-aaf5-ab536efd73aa/scratchpad/sanity_check.db)",
+      "Bash(DATABASE_URL=sqlite:///C:/Users/shael/AppData/Local/Temp/claude/c--Users-shael-brightside/f54c90f5-0cfe-498e-aaf5-ab536efd73aa/scratchpad/sanity_check.db DISCORD_WEBHOOK_URL=https://discord.example/hook .venv/Scripts/python.exe -c ' *)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_purchases.py tests/test_monitoring.py tests/test_discord_notifier.py tests/test_scheduler.py tests/test_smoke.py -q)",
+      "Bash(npm run *)",
+      "Bash(rm -f /c/Users/shael/AppData/Local/Temp/claude/c--Users-shael-brightside/f54c90f5-0cfe-498e-aaf5-ab536efd73aa/scratchpad/alembic_check.db)",
+      "Bash(DATABASE_URL=sqlite:///C:/Users/shael/AppData/Local/Temp/claude/c--Users-shael-brightside/f54c90f5-0cfe-498e-aaf5-ab536efd73aa/scratchpad/alembic_check.db .venv/Scripts/python.exe -m alembic upgrade head)",
+      "Bash(echo \"---exit code: $?---\")"
+    ]
+  }
+}

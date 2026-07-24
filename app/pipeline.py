@@ -211,9 +211,16 @@ def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_pr
     # price) -- deal.title is just a placeholder, use the real Keepa title
     # instead so scan pings don't show "Scanned item (EAN ...)" in Discord.
     embed_title = product.title if raw.source == "scan" and product.title else deal.title
+    # deal.retailer_url for a scan is the synthetic "scan:<ean>:<uuid>" dedup
+    # key (see app/scan.py) -- not a real URL. Discord's API validates the
+    # embed's url field and rejects anything that isn't a real http(s) URL
+    # with a 400 (confirmed live 2026-07-24: every scan that reached a PASS
+    # silently failed to post because of this). Link to the Amazon listing
+    # instead, the only real URL a scan actually has.
+    embed_url = f"https://www.amazon.co.uk/dp/{product.asin}" if raw.source == "scan" else deal.retailer_url
     embed = discord_notifier.build_matched_embed(
         title=embed_title,
-        retailer_url=deal.retailer_url,
+        retailer_url=embed_url,
         image_url=deal.image_url,
         retailer=deal.retailer,
         asin=product.asin,

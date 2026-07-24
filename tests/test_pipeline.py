@@ -181,6 +181,11 @@ def test_scan_source_skips_title_validation(db_session, monkeypatch):
     assert deal.status == "pinged"
     # the embed title uses the real Keepa title, not the EAN placeholder
     assert sent_embeds[0]["title"] == "Completely Unrelated Product Name"
+    # regression: deal.retailer_url for a scan is the synthetic "scan:<ean>:
+    # <uuid>" dedup key, not a real URL -- Discord's API 400s on a non-http(s)
+    # embed url (confirmed live 2026-07-24, every scan pass silently failed
+    # to post because of this). Must link to the Amazon listing instead.
+    assert sent_embeds[0]["url"] == "https://www.amazon.co.uk/dp/B000SCAN01"
 
 
 def test_no_match_found_drops_silently_without_keepa_call(db_session, monkeypatch):
