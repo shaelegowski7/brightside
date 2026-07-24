@@ -8,3 +8,4 @@ __pycache__/
 pwa/node_modules/
 pwa/dist/
 pwa/.env
+.claude/
