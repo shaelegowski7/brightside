@@ -250,6 +250,28 @@ homebargains:
   category_urls:
     - "https://home.bargains/category/999/starbuys"
 
+# John Lewis outlet/clearance scraper. No ScraperAPI needed -- confirmed
+# live 2026-07-24, no bot protection detected. Uses the real "Outlet"
+# section (Endeca-style faceted catalogue), NOT the "Special Offers" CMS
+# hub, which has no inline product data at all (see app/sources/
+# johnlewis.py's module docstring). Unlike B&Q, this DOES need a second
+# per-product fetch -- GTIN only appears on product pages, not the listing
+# -- but it's the standard `gtin13` JSON-LD key, so no retailer-specific
+# extractor override was needed. Pagination beyond page 1 is UNCONFIRMED and
+# appears to be genuinely broken via plain HTTP (the page's own `rel=next`
+# link 404s when fetched directly) -- three sibling category_urls are
+# configured instead of one to get a wider slice of the ~168-item outlet
+# pool each poll, since true pagination isn't reachable this way.
+johnlewis:
+  enabled: true
+  poll_interval_minutes: 180
+  min_delay_seconds: 3
+  max_delay_seconds: 8
+  category_urls:
+    - "https://www.johnlewis.com/browse/outlet/_/N-puqr"
+    - "https://www.johnlewis.com/browse/outlet/home-outlet-offers/_/N-pu1z"
+    - "https://www.johnlewis.com/browse/outlet/electrical-outlet-offers/_/N-pu2f"
+
 # Pokemon Center UK restock/new-release monitor (Phase 3). Different signal
 # than Argos: a "drop" is a stock-status transition, not a price change (see
 # app/sources/pokemon_center.py). No EAN on this site at all, and no Keepa

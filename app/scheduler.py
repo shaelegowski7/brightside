@@ -15,6 +15,7 @@ from .sources.argos import ArgosAdapter
 from .sources.bq import BQAdapter
 from .sources.homebargains import HomeBargainsAdapter
 from .sources.hotukdeals import HotUKDealsAdapter
+from .sources.johnlewis import JohnLewisAdapter
 from .sources.pokemon_center import PokemonCenterAdapter
 from .sources.screwfix import ScrewfixAdapter
 from .sources.smyths import SmythsAdapter
@@ -187,6 +188,33 @@ def poll_homebargains_clearance() -> None:
         db.close()
 
 
+def poll_johnlewis_outlet() -> None:
+    app_cfg = get_config()
+    jl_cfg = app_cfg.get("johnlewis", {})
+    decision_cfg = DecisionConfig.from_app_config(app_cfg)
+    adapter = JohnLewisAdapter(
+        category_urls=jl_cfg["category_urls"],
+        min_delay_s=jl_cfg["min_delay_seconds"],
+        max_delay_s=jl_cfg["max_delay_seconds"],
+    )
+
+    db = SessionLocal()
+    fee_provider = fees.build_fee_provider(db, app_cfg)
+
+    def _on_deal(raw) -> None:
+        try:
+            pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
+        except Exception as e:
+            db.rollback()
+            print(f"[SCHEDULER] {raw.url}: processing error: {e}")
+
+    try:
+        count = adapter.crawl(db, on_deal=_on_deal)
+        print(f"[SCHEDULER] johnlewis: {count} new/changed item(s)")
+    finally:
+        db.close()
+
+
 def poll_pokemon_center() -> None:
     app_cfg = get_config()
     pc_cfg = app_cfg.get("pokemon_center", {})
@@ -324,6 +352,19 @@ def start_scheduler() -> None:
             replace_existing=True,
         )
         print(f"[SCHEDULER] homebargains clearance enabled, polling every {hb_interval}m")
+
+    jl_cfg = app_cfg.get("johnlewis", {})
+    if jl_cfg.get("enabled", False):
+        jl_interval = jl_cfg["poll_interval_minutes"]
+        scheduler.add_job(
+            poll_johnlewis_outlet,
+            IntervalTrigger(minutes=jl_interval),
+            id="poll_johnlewis_outlet",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        print(f"[SCHEDULER] johnlewis outlet enabled, polling every {jl_interval}m")
 
     pc_cfg = app_cfg.get("pokemon_center", {})
     if pc_cfg.get("enabled", False):
