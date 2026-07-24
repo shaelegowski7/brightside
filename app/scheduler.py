@@ -14,6 +14,7 @@ from .pricing.fees import FeeTableProvider
 from .sources.argos import ArgosAdapter
 from .sources.hotukdeals import HotUKDealsAdapter
 from .sources.pokemon_center import PokemonCenterAdapter
+from .sources.smyths import SmythsAdapter
 
 scheduler = BackgroundScheduler()
 
@@ -74,6 +75,34 @@ def poll_argos_clearance() -> None:
         db.close()
 
 
+def poll_smyths_clearance() -> None:
+    app_cfg = get_config()
+    smyths_cfg = app_cfg.get("smyths", {})
+    decision_cfg = DecisionConfig.from_app_config(app_cfg)
+    fee_provider = FeeTableProvider(app_cfg["fees"])
+    adapter = SmythsAdapter(
+        category_urls=smyths_cfg["category_urls"],
+        api_key=get_settings().scraperapi_key,
+        min_delay_s=smyths_cfg["min_delay_seconds"],
+        max_delay_s=smyths_cfg["max_delay_seconds"],
+    )
+
+    db = SessionLocal()
+
+    def _on_deal(raw) -> None:
+        try:
+            pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
+        except Exception as e:
+            db.rollback()
+            print(f"[SCHEDULER] {raw.url}: processing error: {e}")
+
+    try:
+        count = adapter.crawl(db, on_deal=_on_deal)
+        print(f"[SCHEDULER] smyths: {count} new/changed item(s)")
+    finally:
+        db.close()
+
+
 def poll_pokemon_center() -> None:
     app_cfg = get_config()
     pc_cfg = app_cfg.get("pokemon_center", {})
@@ -126,6 +155,19 @@ def start_scheduler() -> None:
             replace_existing=True,
         )
         print(f"[SCHEDULER] argos clearance enabled, polling every {argos_interval}m")
+
+    smyths_cfg = app_cfg.get("smyths", {})
+    if smyths_cfg.get("enabled", False):
+        smyths_interval = smyths_cfg["poll_interval_minutes"]
+        scheduler.add_job(
+            poll_smyths_clearance,
+            IntervalTrigger(minutes=smyths_interval),
+            id="poll_smyths_clearance",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        print(f"[SCHEDULER] smyths clearance enabled, polling every {smyths_interval}m")
 
     pc_cfg = app_cfg.get("pokemon_center", {})
     if pc_cfg.get("enabled", False):

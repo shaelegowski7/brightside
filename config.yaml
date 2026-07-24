@@ -44,11 +44,43 @@ category_blocklist: []
 hukd:
   poll_interval_minutes: 7
   # RSS feeds to poll. hotukdeals redirects /rss/hot -> /rss/trending (confirmed
-  # live 2026-07-19) — use the resolved URL directly. Add keyword/category feeds
-  # as needed, e.g. https://www.hotukdeals.com/rss/keyword/<term>.
+  # live 2026-07-19) — use the resolved URL directly. Additional feeds use
+  # https://www.hotukdeals.com/rss/tag/<slug> (NOT /rss/keyword/<term> as a
+  # prior version of this comment claimed — that path 404s; confirmed live
+  # 2026-07-23 that /rss/tag/<slug> is correct, hyphenated multi-word slugs,
+  # 30 items/feed). Terms below chosen against the categories with the best
+  # configured economics (fees.category_referral_pct: Electronics/PC/Computers
+  # & Accessories at 8% vs 15% elsewhere; category_rank_thresholds: PC/
+  # Electronics 60000, Video Games 40000, Toys & Games 80000).
   feeds:
     - name: trending
       url: "https://www.hotukdeals.com/rss/trending"
+    - name: tag_ssd
+      url: "https://www.hotukdeals.com/rss/tag/ssd"
+    - name: tag_graphics_card
+      url: "https://www.hotukdeals.com/rss/tag/graphics-card"
+    - name: tag_laptop
+      url: "https://www.hotukdeals.com/rss/tag/laptop"
+    - name: tag_headphones
+      url: "https://www.hotukdeals.com/rss/tag/headphones"
+    - name: tag_monitor
+      url: "https://www.hotukdeals.com/rss/tag/monitor"
+    - name: tag_ps5
+      url: "https://www.hotukdeals.com/rss/tag/ps5"
+    - name: tag_xbox
+      url: "https://www.hotukdeals.com/rss/tag/xbox"
+    - name: tag_nintendo_switch
+      url: "https://www.hotukdeals.com/rss/tag/nintendo-switch"
+    - name: tag_lego
+      url: "https://www.hotukdeals.com/rss/tag/lego"
+    - name: tag_board_game
+      url: "https://www.hotukdeals.com/rss/tag/board-game"
+    - name: tag_power_tool
+      url: "https://www.hotukdeals.com/rss/tag/power-tool"
+    - name: tag_vacuum_cleaners
+      url: "https://www.hotukdeals.com/rss/tag/vacuum-cleaners"
+    - name: tag_air_fryer
+      url: "https://www.hotukdeals.com/rss/tag/air-fryer"
   # Merchants that can never be a physical-goods FBA resale candidate —
   # flights/hotels/restaurants (not goods at all) and digital storefronts
   # (game keys, iTunes purchases — nothing to ship/resell). Filtered before
@@ -108,8 +140,58 @@ argos:
   poll_interval_minutes: 180
   min_delay_seconds: 5
   max_delay_seconds: 15
+  # Additional department clearance URLs discovered via the Wayback Machine's
+  # CDX index (archive.org crawls from 2025-2026, since direct/ScraperAPI
+  # discovery wasn't available in this environment — no live ScraperAPI key
+  # configured locally). Argos category IDs (the `c:<id>` segment) are stable
+  # long-lived identifiers, not session tokens, so these should still be
+  # valid — but unlike the RSS feeds above, this could NOT be live-verified
+  # before merging. If a category ID has gone stale, _parse_listing() and the
+  # fetch-failure path already degrade gracefully (logs "[ARGOS] ... fetch
+  # failed" or treats an empty page as "no more results" — see argos.py) so a
+  # bad URL here can't crash the crawl, just silently contributes 0 deals.
+  # Picked departments matching categories that already have tuned rank
+  # thresholds below: toys (Toys & Games), health-and-beauty (Health &
+  # Personal Care/Beauty), sports-and-leisure (Sports & Outdoors),
+  # home-and-furniture (Home & Kitchen), garden-and-diy (Tools & Home
+  # Improvement).
   category_urls:
     - "https://www.argos.co.uk/clearance/technology/c:29949/"
+    - "https://www.argos.co.uk/clearance/toys/c:30299/"
+    - "https://www.argos.co.uk/clearance/health-and-beauty/c:29203/"
+    - "https://www.argos.co.uk/clearance/sports-and-leisure/c:30468/"
+    - "https://www.argos.co.uk/clearance/home-and-furniture/c:29351/"
+    - "https://www.argos.co.uk/clearance/garden-and-diy/c:797660/"
+
+# Smyths Toys UK clearance/sale scraper. Same crawl_state (price-diff)
+# pattern as Argos -- see app/sources/smyths.py's module docstring for the
+# full recon writeup. Confirmed via Wayback Machine archive snapshots only
+# (no local SCRAPERAPI_KEY was available to test live): Nuxt 3 (Vue SSR)
+# storefront, product tiles parsed by DOM pattern (no __NEXT_DATA__-style
+# array like Argos); GTIN comes from a data-loadbee-gtin="<ean>" attribute
+# on the product page, NOT from JSON-LD (confirmed absent there on 2
+# products). `enabled: false` — TWO things need live verification before
+# flipping this on, not just the usual backfill-cost warning:
+#   1. category_urls below is a best guess, NOT a confirmed working "browse
+#      all sale items" URL — /uk/en-gb/sale was never successfully fetched
+#      in this environment (always hit Smyths' Incapsula bot-challenge, in
+#      4 of 6 attempts across the whole site, including via the Wayback
+#      Machine's own crawler). A structurally similar page (/outdoor)
+#      turned out to be a curated ~20-item CMS landing page with no
+#      pagination, not a deep catalog — the real sale page may have the
+#      same shape.
+#   2. Whether ScraperAPI's standard proxy pool can bypass Smyths'
+#      Incapsula/Imperva protection at all is unverified (a harder class of
+#      block than Argos's Akamai — may need ScraperAPI's premium/JS-render
+#      tier). If it can't get through, this source will just silently find
+#      0 items every crawl rather than error.
+smyths:
+  enabled: false
+  poll_interval_minutes: 180
+  min_delay_seconds: 5
+  max_delay_seconds: 15
+  category_urls:
+    - "https://www.smythstoys.com/uk/en-gb/sale"
 
 # Pokemon Center UK restock/new-release monitor (Phase 3). Different signal
 # than Argos: a "drop" is a stock-status transition, not a price change (see
@@ -123,8 +205,20 @@ pokemon_center:
   poll_interval_minutes: 15
   min_delay_seconds: 3
   max_delay_seconds: 8
+  # Additional categories, discovered the same way as Argos's above (Wayback
+  # CDX index — no local ScraperAPI key to verify live). "back-in-stock" is a
+  # direct match for this source's restock-monitor purpose; the others are
+  # the classic high resale-value TCG product types (sealed boxes/packs are
+  # the most commonly flipped Pokemon TCG items). Kept to a small addition —
+  # this source has no EAN mechanism at all (_UNMATCHABLE_BY_DESIGN_SOURCES
+  # in pipeline.py), so every hit here is an unscored "UNVERIFIED MATCH"
+  # ping, not a profit-scored one; widening it trades noise for volume more
+  # directly than HUKD/Argos do.
   category_urls:
     - "https://www.pokemoncenter.com/en-gb/category/new-releases"
+    - "https://www.pokemoncenter.com/en-gb/category/back-in-stock"
+    - "https://www.pokemoncenter.com/en-gb/category/elite-trainer-box"
+    - "https://www.pokemoncenter.com/en-gb/category/booster-packs"
 
 # Category-based fee estimate fallback (SP-API not live yet). Ballpark figures
 # based on Amazon UK's public referral-fee schedule and FBA size tiers — verify
