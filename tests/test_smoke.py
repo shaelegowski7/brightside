@@ -38,6 +38,13 @@ def test_status_summary_respects_hours_query_param():
     assert resp.json()["hours"] == 6
 
 
+def test_deals_dashboard_responds_with_html():
+    resp = client.get("/deals")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "Confirmed Deals" in resp.text
+
+
 def _seed_scored_product(db_session, asin: str) -> None:
     from app import models
 

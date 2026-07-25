@@ -4,10 +4,11 @@ Schema is Alembic-managed (`alembic upgrade head` runs as the Railway
 release step — see Procfile), not create_all(), per this project's stack."""
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from . import auth, monitoring, purchases, scan, schemas
+from . import auth, dashboard, monitoring, purchases, scan, schemas
 from .config import get_config, get_settings
 from .database import engine, get_db
 from .decision.engine import DecisionConfig
@@ -37,6 +38,12 @@ def root():
 @app.get("/status/summary")
 def status_summary(hours: int = 24, db: Session = Depends(get_db)):
     return monitoring.build_summary(db, hours=hours)
+
+
+@app.get("/deals", response_class=HTMLResponse)
+def deals_dashboard(db: Session = Depends(get_db)):
+    rows = dashboard.get_confirmed_deals(db)
+    return dashboard.render_page(rows)
 
 
 @app.post("/purchases")
