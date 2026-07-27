@@ -19,3 +19,21 @@ export interface ApiError {
   status: number;
   message: string;
 }
+
+// Mirrors app/schemas.py's ConfirmedDeal.
+export interface ConfirmedDeal {
+  title: string;
+  retailer: string | null;
+  retailer_url: string | null;
+  asin: string | null;
+  match_confidence: string | null;
+  buy_price_pence: number;
+  sell_price_pence: number | null;
+  net_profit_pence: number | null;
+  roi: number | null;
+  est_monthly_sales: number | null;
+  verdict: "PASS" | "PASS_WITH_FLAGS" | "REJECT";
+  flags: string[];
+  ts: string | null;
+  amazon_url: string | null;
+}

@@ -1,4 +1,4 @@
-import type { ApiError, ScanResponse } from "./types";
+import type { ApiError, ConfirmedDeal, ScanResponse } from "./types";
 
 const SECRET_STORAGE_KEY = "fba-scanner-shared-secret";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL as string;
@@ -47,4 +47,29 @@ export async function postScan(ean: string, buyPricePence: number): Promise<Scan
     throw { status: resp.status, message: `Server error (${resp.status})` } satisfies ApiError;
   }
   return (await resp.json()) as ScanResponse;
+}
+
+export async function getConfirmedDeals(): Promise<ConfirmedDeal[]> {
+  const secret = getStoredSecret();
+  if (!secret) {
+    throw { status: 401, message: "No shared secret set" } satisfies ApiError;
+  }
+
+  let resp: Response;
+  try {
+    resp = await fetch(`${API_BASE_URL}/deals.json`, {
+      headers: { "X-Shared-Secret": secret },
+    });
+  } catch {
+    throw { status: 0, message: "Network error -- check your connection" } satisfies ApiError;
+  }
+
+  if (resp.status === 401) {
+    clearStoredSecret();
+    throw { status: 401, message: "Shared secret rejected -- re-enter it" } satisfies ApiError;
+  }
+  if (!resp.ok) {
+    throw { status: resp.status, message: `Server error (${resp.status})` } satisfies ApiError;
+  }
+  return (await resp.json()) as ConfirmedDeal[];
 }

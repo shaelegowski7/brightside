@@ -38,3 +38,26 @@ class ScanResponse(BaseModel):
     posted_to_discord: bool
     keepa_url: str | None = None
     amazon_url: str | None = None
+
+
+class DealsLogin(BaseModel):
+    secret: str
+
+
+class ConfirmedDeal(BaseModel):
+    """JSON twin of dashboard.DealRow -- powers the PWA's confirmed-deals
+    view, same underlying query as the /deals HTML dashboard."""
+    title: str
+    retailer: str | None = None
+    retailer_url: str | None = None
+    asin: str | None = None
+    match_confidence: str | None = None
+    buy_price_pence: int
+    sell_price_pence: int | None = None
+    net_profit_pence: int | None = None
+    roi: float | None = None
+    est_monthly_sales: float | None = None
+    verdict: str
+    flags: list[str] = []
+    ts: datetime | None = None
+    amazon_url: str | None = None

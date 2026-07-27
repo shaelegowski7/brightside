@@ -2,9 +2,9 @@
 scheduler startup live in main.py, DB session handling in database.py.
 Schema is Alembic-managed (`alembic upgrade head` runs as the Railway
 release step — see Procfile), not create_all(), per this project's stack."""
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Cookie, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -23,7 +23,7 @@ app = FastAPI(title="FBA Deal Scanner")
 _pwa_origin = get_settings().pwa_origin
 if _pwa_origin:
     app.add_middleware(
-        CORSMiddleware, allow_origins=[_pwa_origin], allow_methods=["POST"],
+        CORSMiddleware, allow_origins=[_pwa_origin], allow_methods=["POST", "GET"],
         allow_headers=["*"], allow_credentials=False,
     )
 
@@ -40,10 +40,63 @@ def status_summary(hours: int = 24, db: Session = Depends(get_db)):
     return monitoring.build_summary(db, hours=hours)
 
 
+DEALS_COOKIE = "deals_secret"
+
+
 @app.get("/deals", response_class=HTMLResponse)
-def deals_dashboard(db: Session = Depends(get_db)):
+def deals_dashboard(db: Session = Depends(get_db), deals_secret: str | None = Cookie(default=None)):
+    expected = get_settings().pwa_shared_secret
+    if not expected or deals_secret != expected:
+        return dashboard.render_login_page()
     rows = dashboard.get_confirmed_deals(db)
     return dashboard.render_page(rows)
+
+
+@app.post("/deals/login")
+def deals_login(body: schemas.DealsLogin):
+    expected = get_settings().pwa_shared_secret
+    if not expected or body.secret != expected:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    resp = JSONResponse({"ok": True})
+    # Cookie holds the secret itself -- no session store, matching this
+    # app's single-shared-secret model (see auth.py). httponly blocks JS
+    # access; secure is relaxed only in development so local http testing
+    # (no TLS) still works.
+    resp.set_cookie(
+        key=DEALS_COOKIE,
+        value=body.secret,
+        httponly=True,
+        samesite="lax",
+        secure=get_settings().environment != "development",
+        max_age=60 * 60 * 24 * 30,
+    )
+    return resp
+
+
+@app.get("/deals.json", response_model=list[schemas.ConfirmedDeal])
+def deals_json(db: Session = Depends(get_db), _: None = Depends(auth.require_shared_secret)):
+    """Same query as /deals, as JSON -- feeds the PWA's confirmed-deals
+    view, which already sends X-Shared-Secret (see pwa/src/api.ts)."""
+    rows = dashboard.get_confirmed_deals(db)
+    return [
+        schemas.ConfirmedDeal(
+            title=r.title,
+            retailer=r.retailer,
+            retailer_url=r.retailer_url,
+            asin=r.asin,
+            match_confidence=r.match_confidence,
+            buy_price_pence=r.buy_price_pence,
+            sell_price_pence=r.sell_price_pence,
+            net_profit_pence=r.net_profit_pence,
+            roi=r.roi,
+            est_monthly_sales=r.est_monthly_sales,
+            verdict=r.verdict,
+            flags=r.flags,
+            ts=r.ts,
+            amazon_url=f"https://www.amazon.co.uk/dp/{r.asin}" if r.asin else None,
+        )
+        for r in rows
+    ]
 
 
 @app.post("/purchases")

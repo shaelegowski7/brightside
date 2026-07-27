@@ -14,6 +14,12 @@ const VERDICT_LABEL: Record<ScanResponse["verdict"], string> = {
   REJECT: "❌ REJECT",
 };
 
+const VERDICT_CLASS: Record<ScanResponse["verdict"], string> = {
+  PASS: "verdict-pass",
+  PASS_WITH_FLAGS: "verdict-flags",
+  REJECT: "verdict-reject",
+};
+
 interface VerdictViewProps {
   result: ScanResponse;
   onScanAnother: () => void;
@@ -22,10 +28,10 @@ interface VerdictViewProps {
 export function VerdictView({ result, onScanAnother }: VerdictViewProps) {
   return (
     <div>
-      <h2>{VERDICT_LABEL[result.verdict]}</h2>
+      <p className={`verdict-title ${VERDICT_CLASS[result.verdict]}`}>{VERDICT_LABEL[result.verdict]}</p>
 
       {result.verdict !== "REJECT" && (
-        <dl>
+        <dl className="stats">
           <dt>Buy price</dt>
           <dd>{money(result.buy_price_pence)}</dd>
           <dt>Est. sell price</dt>
@@ -38,31 +44,30 @@ export function VerdictView({ result, onScanAnother }: VerdictViewProps) {
       )}
 
       {result.reasons.length > 0 && (
-        <ul>
+        <ul className="reasons">
           {result.reasons.map((r) => (
             <li key={r}>{r}</li>
           ))}
         </ul>
       )}
       {result.flags.length > 0 && (
-        <p>Flags: {result.flags.join(", ")}</p>
+        <p className="muted">Flags: {result.flags.map((f) => <span className="chip" key={f}>{f}</span>)}</p>
       )}
 
-      <p>
+      <p className="muted">
         {result.posted_to_discord
           ? "Posted to Discord."
           : "Not posted to Discord (rejected, or a recent ping already covers this item)."}
       </p>
 
       {result.asin && (
-        <p>
+        <p className="links-row">
           {result.keepa_url && <a href={result.keepa_url} target="_blank" rel="noreferrer">Keepa chart</a>}
-          {" · "}
           {result.amazon_url && <a href={result.amazon_url} target="_blank" rel="noreferrer">Amazon listing</a>}
         </p>
       )}
 
-      <button type="button" onClick={onScanAnother}>Scan another item</button>
+      <button type="button" className="btn-primary" onClick={onScanAnother}>Scan another item</button>
     </div>
   );
 }

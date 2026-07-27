@@ -38,11 +38,45 @@ def test_status_summary_respects_hours_query_param():
     assert resp.json()["hours"] == 6
 
 
-def test_deals_dashboard_responds_with_html():
+def test_deals_dashboard_shows_login_form_when_unauthenticated():
     resp = client.get("/deals")
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
-    assert "Confirmed Deals" in resp.text
+    assert "login-form" in resp.text
+
+
+def test_deals_dashboard_rejects_stale_cookie():
+    resp = client.get("/deals", cookies={"deals_secret": "wrong-secret"})
+    assert resp.status_code == 200
+    assert "login-form" in resp.text
+
+
+def test_deals_login_sets_cookie_and_unlocks_dashboard():
+    login_resp = client.post("/deals/login", json={"secret": "test-shared-secret"})
+    assert login_resp.status_code == 200
+    assert login_resp.cookies.get("deals_secret") == "test-shared-secret"
+
+    dashboard_resp = client.get("/deals", cookies={"deals_secret": "test-shared-secret"})
+    assert dashboard_resp.status_code == 200
+    assert "login-form" not in dashboard_resp.text
+    assert "No confirmed deals yet" in dashboard_resp.text or "<table" in dashboard_resp.text
+
+
+def test_deals_login_rejects_wrong_secret():
+    resp = client.post("/deals/login", json={"secret": "nope"})
+    assert resp.status_code == 401
+    assert "deals_secret" not in resp.cookies
+
+
+def test_deals_json_requires_shared_secret():
+    resp = client.get("/deals.json")
+    assert resp.status_code == 401
+
+
+def test_deals_json_responds_with_secret_header():
+    resp = client.get("/deals.json", headers=_AUTH_HEADERS)
+    assert resp.status_code == 200
+    assert resp.json() == []
 
 
 def _seed_scored_product(db_session, asin: str) -> None:

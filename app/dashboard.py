@@ -3,12 +3,14 @@ PASS/PASS_WITH_FLAGS) -- the "spreadsheet" view of everything the pipeline
 has actually financially vetted, not just whatever got pinged to Discord
 (cooldown/ping failures are excluded there but not here -- a verdict is
 "confirmed good" the moment scoring says so, independent of notification
-plumbing). No auth: matches GET /status/summary's existing precedent --
-read-only endpoints in this app aren't gated behind the shared secret, that
-protects writes only (see auth.py's docstring). Deal/product titles are
-untrusted retailer-sourced text, so every dynamic value is html.escape()'d
-before being written into the page -- this is the only place in the app
-that renders scraped text as HTML rather than JSON."""
+plumbing). Gated by the shared secret, unlike GET /status/summary -- this
+page surfaces buy prices, ROI and sourcing details someone browsing by URL
+shouldn't get for free. Since it's plain browser navigation (no custom
+headers), auth is a short-lived cookie set by POST /deals/login (see
+main.py) rather than the X-Shared-Secret header /scan and /deals.json use.
+Deal/product titles are untrusted retailer-sourced text, so every dynamic
+value is html.escape()'d before being written into the page -- this is the
+only place in the app that renders scraped text as HTML rather than JSON."""
 import html
 from dataclasses import dataclass
 from datetime import datetime
@@ -124,6 +126,96 @@ _COLUMNS = [
     ("Profit", True), ("ROI", True), ("Est/mo", True), ("Match", False),
     ("Verdict", False), ("Flags", False), ("Scored", False),
 ]
+
+
+def render_login_page() -> str:
+    """Shown at GET /deals when the deals_secret cookie is missing/stale.
+    Submits via fetch (JSON body), not a native form POST, so the secret
+    never rides along in a URL -- same rationale as the header-based auth
+    on /scan, adapted for plain browser navigation (see auth.py)."""
+    return """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brightside — Confirmed Deals</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --panel: #ffffff; --border: #e3e6ea; --text: #1a1d21;
+    --muted: #6b7280; --accent: #2563eb; --red: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --panel: #171a21; --border: #2a2f3a; --text: #e6e8eb;
+      --muted: #9aa3af; --accent: #60a5fa; --red: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding: 16px;
+  }
+  .card {
+    width: 100%; max-width: 340px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 28px; box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); font-size: 13.5px; margin: 0 0 18px; }
+  input {
+    width: 100%; font-size: 16px; padding: 11px 12px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text); margin-bottom: 12px;
+  }
+  button {
+    width: 100%; background: var(--accent); color: #fff; border: none; border-radius: 8px;
+    padding: 11px 16px; font-size: 15px; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; cursor: not-allowed; }
+  .error { color: var(--red); font-size: 13.5px; margin: 0 0 12px; display: none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Confirmed Deals</h1>
+  <p class="subtitle">Enter the shared secret to continue.</p>
+  <p class="error" id="error"></p>
+  <form id="login-form">
+    <input type="password" id="secret" placeholder="Shared secret" autofocus required>
+    <button type="submit">Continue</button>
+  </form>
+</div>
+<script>
+  (function () {
+    var form = document.getElementById("login-form");
+    var errorEl = document.getElementById("error");
+    form.addEventListener("submit", async function (e) {
+      e.preventDefault();
+      errorEl.style.display = "none";
+      var btn = form.querySelector("button");
+      btn.disabled = true;
+      try {
+        var resp = await fetch("/deals/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ secret: document.getElementById("secret").value }),
+        });
+        if (resp.ok) {
+          location.href = "/deals";
+          return;
+        }
+        errorEl.textContent = "Incorrect secret.";
+        errorEl.style.display = "block";
+      } catch (err) {
+        errorEl.textContent = "Network error -- try again.";
+        errorEl.style.display = "block";
+      }
+      btn.disabled = false;
+    });
+  })();
+</script>
+</body>
+</html>"""
 
 
 def render_page(rows: list[DealRow]) -> str:

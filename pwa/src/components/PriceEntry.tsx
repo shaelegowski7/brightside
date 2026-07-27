@@ -19,9 +19,12 @@ export function PriceEntry({ ean, onSubmit, onRescan, submitting }: PriceEntryPr
 
   return (
     <form onSubmit={handleSubmit}>
-      <p>
-        Scanned: <code>{ean}</code> <button type="button" onClick={onRescan}>Rescan</button>
-      </p>
+      <div className="scan-row">
+        <span>
+          Scanned: <code>{ean}</code>
+        </span>
+        <button type="button" className="btn-secondary" onClick={onRescan}>Rescan</button>
+      </div>
       <label htmlFor="price">Shelf price (£)</label>
       <input
         id="price"
