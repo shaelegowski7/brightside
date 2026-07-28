@@ -8,10 +8,18 @@ authoritative source for the decision engine's buy-box/offer-count inputs.
 Field mapping is grounded in the installed `keepa` package's typed models
 (keepa.models.backend.Stats/Product, and the Product.CsvType index ordering
 read directly from the library source — see CsvType index constants below)
-since no live API key was available at build time. Two fields carry
-residual uncertainty and are flagged inline: categoryTree[0] as "the"
-category, and stats.buyBoxIsAmazon as the Amazon-on-listing signal. Verify
-both against a real product on first live run.
+since no live API key was available at build time. categoryTree[0] as "the"
+category still carries residual uncertainty, flagged inline where it's used.
+
+stats.buyBoxIsAmazon was the original Amazon-on-listing signal but turned
+out to be wrong: verified live 2026-07-28 against B0BXX8X7DM (a paint
+listing a manual QA pass caught as a false-negative miss) — buyBoxIsAmazon
+was False because a 3rd-party FBM seller happened to hold the buy box at
+that exact moment, while Amazon still had a live FBA/Prime/New offer sitting
+on the same ASIN. buyBoxIsAmazon only reflects the instantaneous buy-box
+winner, which rotates; it understates real Amazon-competition risk, since
+Amazon can reclaim the buy box at any time even while briefly behind. See
+`_amazon_has_new_offer` for the offers-array check that replaced it.
 
 fbaFees.pickAndPackFee confirmed live 2026-07-21 against a real matched
 product (B00HER8E5A, DEWALT multi-tool): {"lastUpdate": ..., "pickAndPackFee":
@@ -86,6 +94,18 @@ def _category_name(product: dict) -> str | None:
     # top-level category matching config.yaml's coarse category names.
     tree = product.get("categoryTree") or []
     return tree[0]["name"] if tree else None
+
+
+def _amazon_has_new_offer(product: dict) -> bool:
+    """True if Amazon has a live new-condition offer on this ASIN, buy box
+    or not (condition==1 per Keepa's offer schema; confirmed live 2026-07-28
+    against B0BXX8X7DM alongside a used-condition 3rd-party offer at
+    condition==2, matching Keepa's documented New/Used-LikeNew/... ordering).
+    See the module docstring for why this replaced stats.buyBoxIsAmazon."""
+    return any(
+        o.get("isAmazon") and o.get("condition") == 1
+        for o in (product.get("offers") or [])
+    )
 
 
 def _fba_fulfilment_fee_pence(product: dict) -> int | None:
@@ -312,7 +332,7 @@ def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
             category=_category_name(product),
             sales_rank=int(sales_rank) if sales_rank is not None else None,
             buybox_price_pence=int(buybox_price) if buybox_price is not None else None,
-            amazon_on_listing=bool(stats.get("buyBoxIsAmazon")),
+            amazon_on_listing=_amazon_has_new_offer(product),
             fba_offer_count=int(fba_offer_count) if fba_offer_count is not None else 0,
             lowest_fba_offer_pence=int(lowest_fba) if lowest_fba is not None else None,
             est_monthly_sales=est_monthly_sales,
