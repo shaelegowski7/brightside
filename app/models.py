@@ -134,8 +134,12 @@ class StockState(Base):
 class TitleSearchCache(Base):
     """Negative+positive cache for the model-number/title Keepa search
     fallback (spec priority #2) — keyed on the extracted model-number term
-    (see app/matching/model_number.py), not the raw deal title, so two
-    different HUKD posts mentioning the same code share one cache entry.
+    (see app/matching/model_number.py) where one exists, so two different
+    HUKD posts mentioning the same code share one cache entry. For
+    pipeline.py's _FULL_TITLE_SEARCH_SOURCES (GTIN-less single-product
+    scrapers with no model-number token to key on), it's keyed on the raw
+    deal title instead — still fine as a cache key since it's a real
+    retailer product title, not a search query someone's likely to retype.
     asin=None means "searched, found nothing usable"; per spec, don't
     re-search the same failed term within 7 days (see
     app/matching/title_search_cache.py). A found asin has no expiry —

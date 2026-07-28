@@ -405,6 +405,72 @@ def test_title_search_result_is_cached_across_deals(db_session, monkeypatch):
     assert search_calls == ["AF300UK"]   # second deal reused the cache, no second Keepa search
 
 
+def test_full_title_search_fallback_for_gtin_less_source(db_session, monkeypatch):
+    """B&Q/Screwfix/Home Bargains have no GTIN mechanism at all and titles
+    like paint colours have no model-number token either -- for sources in
+    _FULL_TITLE_SEARCH_SOURCES, the raw title itself becomes the Keepa
+    search term instead of giving up."""
+    raw = RawDeal(
+        source="bq", retailer="B&Q", title="Dulux Easycare Matt Emulsion Paint - Timeless 2.5L",
+        url="https://diy.com/departments/dulux-easycare-timeless/1234567.html",
+        buy_price_pence=1500, image_url=None, html="<html><body>no structured data</body></html>",
+    )
+
+    search_calls = []
+
+    def fake_search_by_term(db, term):
+        search_calls.append(term)
+        return keepa_client.Stage1Result(
+            asin="B000PAINT1", title="Dulux Easycare Matt Emulsion Paint Timeless 2.5L",
+            category="DIY & Tools", sales_rank=8000, est_sell_price_pence=2000, rank_history_days=200,
+        )
+    monkeypatch.setattr(keepa_client, "search_by_term", fake_search_by_term)
+    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins: {
+        "B000PAINT1": _stage2(
+            asin="B000PAINT1", title="Dulux Easycare Matt Emulsion Paint Timeless 2.5L", category="DIY & Tools",
+            sales_rank=8000, buybox_price_pence=2000, fba_offer_count=1, est_monthly_sales=40,
+            buybox_avg_90d_pence=1950,
+        ),
+    })
+    import app.discord_notifier as dn
+    monkeypatch.setattr(dn, "send_ping", lambda webhook_url, embed: True)
+
+    pipeline.process_deal(db_session, raw, _decision_cfg(), _fee_provider(), _APP_CFG)
+
+    assert search_calls == ["Dulux Easycare Matt Emulsion Paint - Timeless 2.5L"]
+    deal = db_session.query(models.Deal).filter(models.Deal.url == raw.url).first()
+    product = db_session.get(models.Product, deal.product_id)
+    assert product.asin == "B000PAINT1"
+    assert product.matched_via == "title_search"
+    assert product.confidence == "low"
+
+
+def test_full_title_search_fallback_not_used_for_other_sources(db_session, monkeypatch):
+    """The same model-number-less title on a source NOT in
+    _FULL_TITLE_SEARCH_SOURCES (e.g. hotukdeals, whose noisy multi-item
+    posts are exactly what the model-number-only restriction guards
+    against) must still drop as no_ean_match without ever calling Keepa's
+    product-finder."""
+    raw = RawDeal(
+        source="hotukdeals", retailer="B&Q", title="Dulux Easycare Matt Emulsion Paint - Timeless 2.5L",
+        url="https://www.hotukdeals.com/deals/dulux-paint-8888888",
+        buy_price_pence=1500, image_url=None,
+    )
+    monkeypatch.setattr(resolver, "resolve", lambda url, key="": resolver.ResolvedDeal(
+        final_url="https://diy.com/departments/dulux-easycare-timeless/1234567.html",
+        html="<html><body>no structured data</body></html>", status_code=200, blocked=False,
+    ))
+
+    def _boom(db, term):
+        raise AssertionError("search_by_term must not be called for a non-fallback source")
+    monkeypatch.setattr(keepa_client, "search_by_term", _boom)
+
+    pipeline.process_deal(db_session, raw, _decision_cfg(), _fee_provider(), _APP_CFG)
+
+    deal = db_session.query(models.Deal).filter(models.Deal.url == raw.url).first()
+    assert deal.status == "no_ean_match"
+
+
 def test_keepa_fulfilment_fee_yields_clean_pass_not_estimated(db_session, monkeypatch):
     """When Keepa supplies real fbaFees.pickAndPackFee AND referralFeePercentage,
     pipeline must pass both through to fee_provider.get_fees() and the
@@ -495,6 +561,11 @@ def test_scraper_deal_with_html_skips_resolver(db_session, monkeypatch):
     def _boom(url):
         raise AssertionError("resolver.resolve must not be called for scraper deals")
     monkeypatch.setattr(resolver, "resolve", _boom)
+    # No JSON-LD and no model-number token in "Clearance Widget" -- argos is
+    # in _FULL_TITLE_SEARCH_SOURCES, so it still reaches Keepa's title
+    # search (unlike before that source was added). Stub a miss rather than
+    # let it hit the real API with the test config's placeholder key.
+    monkeypatch.setattr(keepa_client, "search_by_term", lambda db, term: None)
 
     sent_embeds = []
     import app.discord_notifier as dn
@@ -504,7 +575,7 @@ def test_scraper_deal_with_html_skips_resolver(db_session, monkeypatch):
 
     deal = db_session.query(models.Deal).filter(models.Deal.url == raw.url).first()
     assert deal.retailer_url == raw.url
-    assert deal.status == "no_ean_match"   # no JSON-LD in the fixture html -> no match, dropped silently
+    assert deal.status == "no_ean_match"   # no JSON-LD, title search also misses -> dropped silently
     assert len(sent_embeds) == 0
 
 

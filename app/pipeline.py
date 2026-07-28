@@ -68,6 +68,25 @@ _UNMATCHABLE_BY_DESIGN_SOURCES = {"pokemon_center"}
 # against its own placeholder title.
 _SKIP_TITLE_VALIDATION_SOURCES = {"scan"}
 
+# Sources where _try_title_search falls back to searching Keepa on the
+# actual retailer product title when no model-number token can be
+# extracted, instead of giving up outright. NOT extended to HotUKDeals:
+# noisy multi-item aggregator posts are exactly what the model-number-only
+# restriction was built to avoid (see _try_title_search). Argos included
+# 2026-07-28 after checking against the real constraint (Keepa base tier:
+# ~20 tokens/min refill, ~28,800/day capacity, per fba-deal-scanner-spec.md)
+# rather than this project's own daily_token_budget_alert (a soft 6,000/day
+# monitoring tripwire, not a hard ceiling -- see scheduler.py's daily
+# summary). All four sources combined (~2,100 Argos + ~830 bq/screwfix/
+# homebargains searches/week, ~9 tokens each) plus existing stage1/stage2
+# baseline lands around 4,000-8,000 tokens/day -- comfortably inside the
+# real 28,800/day capacity even though it may trip the local alert more
+# often (harmless; bump the config value if that gets noisy). Every Keepa
+# call already runs wait=True, which queues on exhaustion instead of
+# failing, so a heavy burst just makes that crawl run take longer, not
+# error -- there's no hard deadline before the next 180-min cycle.
+_FULL_TITLE_SEARCH_SOURCES = {"bq", "screwfix", "homebargains", "argos"}
+
 
 def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_provider: FeeProvider, app_cfg: dict) -> None:
     deal = _upsert_deal(db, raw)
@@ -111,7 +130,7 @@ def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_pr
 
     stage1_from_search = None
     if not asin and not ean:
-        asin, stage1_from_search = _try_title_search(db, deal.title)
+        asin, stage1_from_search = _try_title_search(db, deal.title, raw.source)
         if asin:
             matched_via, confidence = "title_search", "low"
 
@@ -268,17 +287,28 @@ def _upsert_deal(db: Session, raw: RawDeal) -> models.Deal | None:
     return existing
 
 
-def _try_title_search(db: Session, title: str) -> tuple[str | None, "keepa_client.Stage1Result | None"]:
+def _try_title_search(db: Session, title: str, source: str) -> tuple[str | None, "keepa_client.Stage1Result | None"]:
     """Spec priority #2, only reached after structured EAN/ASIN extraction
     (priority #1) has already failed. Deliberately does not search using
     the raw (often noisy, multi-item) deal title itself -- only a specific
     extracted model-number-like code (see matching/model_number.py) -- to
-    avoid garbage matches on generic multi-item HUKD posts. Caches both
-    hits and misses so the same failed term isn't re-searched within its
-    7-day window (matching/title_search_cache.py)."""
+    avoid garbage matches on generic multi-item HUKD posts. The one
+    exception is _FULL_TITLE_SEARCH_SOURCES: single-product-page scrapers
+    with no GTIN at all and no noisy-multi-item risk, where a title without
+    a model-number token (94% of them, confirmed live 2026-07-28 -- paint
+    colours, furniture style names, no alphanumeric code anywhere) would
+    otherwise never get a match attempt. Caches both hits and misses so the
+    same failed term isn't re-searched within its 7-day window
+    (matching/title_search_cache.py) -- shared cache, so a model-number
+    term and a full-title term for the same product are different keys and
+    won't collide."""
     term = model_number.extract_model_number(title)
     if term is None:
-        return None, None
+        if source not in _FULL_TITLE_SEARCH_SOURCES:
+            return None, None
+        term = title.strip()
+        if not term:
+            return None, None
 
     cache_hit, cached_asin = title_search_cache.get_cached(db, term)
     if cache_hit:
