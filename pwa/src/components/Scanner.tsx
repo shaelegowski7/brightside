@@ -37,10 +37,26 @@ export function Scanner({ onDetected }: ScannerProps) {
       });
 
     return () => {
-      if (scannerRef.current) {
-        scannerRef.current.stop().catch(() => {
-          // already stopped/stopping -- ignore
+      const activeScanner = scannerRef.current;
+      if (!activeScanner) return;
+      try {
+        // html5-qrcode's stop() is typed as Promise<void> but actually
+        // throws a plain synchronous string -- "Cannot stop, scanner is
+        // not running or paused." -- whenever start() hasn't reached its
+        // SCANNING state yet (confirmed in node_modules/html5-qrcode/esm/
+        // html5-qrcode.js: the check happens before any promise is
+        // constructed). A bare .catch() on the result can't catch that,
+        // since the throw happens before stop() returns anything to chain
+        // onto -- it crashed the whole app with no error boundary to catch
+        // it (confirmed live 2026-07-29: switching tabs right after
+        // landing on Scan reliably blanked the page). Needs an actual
+        // try/catch around the call itself.
+        activeScanner.stop().catch(() => {
+          // stop() started but rejected later (e.g. already stopping) -- ignore
         });
+      } catch {
+        // start() never reached SCANNING (still pending, or already
+        // failed/stopped) -- nothing to stop.
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
