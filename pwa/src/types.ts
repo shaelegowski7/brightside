@@ -20,6 +20,22 @@ export interface ApiError {
   message: string;
 }
 
+// Mirrors app/crawl_runner.py's SourceRun/CrawlRun.to_dict().
+export interface CrawlSourceStatus {
+  key: string;
+  label: string;
+  status: "pending" | "running" | "done" | "error" | "skipped";
+  new_deals: number | null;
+  error: string | null;
+}
+
+export interface CrawlStatus {
+  running: boolean;
+  started_at: string | null;
+  finished_at: string | null;
+  sources: CrawlSourceStatus[];
+}
+
 // Mirrors app/schemas.py's ConfirmedDeal.
 export interface ConfirmedDeal {
   title: string;

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getConfirmedDeals } from "../api";
+import { CrawlPanel } from "./CrawlPanel";
 import type { ApiError, ConfirmedDeal } from "../types";
 
 function money(pence: number | null): string {
@@ -40,6 +41,25 @@ export function ConfirmedDeals({ onAuthLost }: { onAuthLost: () => void }) {
 
   useEffect(load, []);
 
+  return (
+    <div>
+      <CrawlPanel onAuthLost={onAuthLost} onFinished={load} />
+      <DealsList deals={deals} loading={loading} error={error} onRetry={load} />
+    </div>
+  );
+}
+
+function DealsList({
+  deals,
+  loading,
+  error,
+  onRetry,
+}: {
+  deals: ConfirmedDeal[] | null;
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+}) {
   if (loading) {
     return (
       <div className="card">
@@ -52,7 +72,7 @@ export function ConfirmedDeals({ onAuthLost }: { onAuthLost: () => void }) {
     return (
       <div className="card">
         <p role="alert">{error}</p>
-        <button type="button" className="btn-secondary" onClick={load}>
+        <button type="button" className="btn-secondary" onClick={onRetry}>
           Retry
         </button>
       </div>

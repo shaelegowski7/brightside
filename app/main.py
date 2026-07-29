@@ -2,13 +2,15 @@
 scheduler startup live in main.py, DB session handling in database.py.
 Schema is Alembic-managed (`alembic upgrade head` runs as the Railway
 release step — see Procfile), not create_all(), per this project's stack."""
-from fastapi import Cookie, Depends, FastAPI, HTTPException
+import asyncio
+
+from fastapi import Cookie, Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from . import auth, dashboard, monitoring, purchases, scan, schemas
+from . import auth, crawl_runner, dashboard, monitoring, purchases, scan, schemas
 from .config import get_config, get_settings
 from .database import engine, get_db
 from .decision.engine import DecisionConfig
@@ -139,6 +141,64 @@ def create_scan(
     decision_cfg = DecisionConfig.from_app_config(app_cfg)
     fee_provider = fees.build_fee_provider(db, app_cfg)
     return scan.run_scan(db, body.ean, body.buy_price, decision_cfg, fee_provider, app_cfg)
+
+
+@app.post("/crawl")
+def trigger_crawl(_: None = Depends(auth.require_shared_secret)):
+    started, status = crawl_runner.start_crawl()
+    return {"started": started, **status}
+
+
+@app.get("/crawl/status")
+def crawl_status(_: None = Depends(auth.require_shared_secret)):
+    return crawl_runner.get_status()
+
+
+_CRAWL_WS_POLL_INTERVAL_S = 0.3
+_CRAWL_WS_AUTH_TIMEOUT_S = 10.0
+
+
+@app.websocket("/crawl/ws")
+async def crawl_ws(websocket: WebSocket):
+    """Live crawl status, replacing the PWA's old fixed-interval REST
+    polling. Auth can't use the X-Shared-Secret header /crawl and
+    /crawl.json use -- the browser's native WebSocket API has no way to set
+    custom headers on the handshake -- and a ?secret= query param would put
+    it in server/proxy logs and browser history, exactly what auth.py's
+    header-not-query-param header choice exists to avoid. So the secret is
+    sent as the first text message after connecting instead, checked before
+    anything else happens.
+
+    Pushes crawl_runner's in-memory state on a short internal poll (not
+    true pub/sub off the background crawl thread -- that would need
+    asyncio.run_coroutine_threadsafe bridging from a plain thread, real
+    complexity for a 3-user tool) and only sends when it actually changed,
+    so the client gets near-real-time updates without the server hammering
+    itself or the client re-requesting on its own timer."""
+    await websocket.accept()
+    try:
+        secret = await asyncio.wait_for(websocket.receive_text(), timeout=_CRAWL_WS_AUTH_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        await websocket.close(code=4001, reason="no secret received in time")
+        return
+    except WebSocketDisconnect:
+        return
+
+    expected = get_settings().pwa_shared_secret
+    if not expected or secret != expected:
+        await websocket.close(code=4001, reason="unauthorized")
+        return
+
+    last_sent: dict | None = None
+    try:
+        while True:
+            status = crawl_runner.get_status()
+            if status != last_sent:
+                await websocket.send_json(status)
+                last_sent = status
+            await asyncio.sleep(_CRAWL_WS_POLL_INTERVAL_S)
+    except WebSocketDisconnect:
+        pass
 
 
 @app.get("/health")

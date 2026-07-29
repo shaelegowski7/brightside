@@ -23,11 +23,12 @@ from .sources.smyths import SmythsAdapter
 scheduler = BackgroundScheduler()
 
 
-def poll_hukd_feeds() -> None:
+def poll_hukd_feeds() -> int:
     app_cfg = get_config()
     decision_cfg = DecisionConfig.from_app_config(app_cfg)
     merchant_blocklist = {m.lower() for m in app_cfg["hukd"].get("merchant_blocklist", [])}
 
+    processed_count = 0
     db = SessionLocal()
     try:
         fee_provider = fees.build_fee_provider(db, app_cfg)
@@ -44,14 +45,16 @@ def poll_hukd_feeds() -> None:
                     continue
                 try:
                     pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
+                    processed_count += 1
                 except Exception as e:
                     db.rollback()
                     print(f"[SCHEDULER] {raw.url}: processing error: {e}")
     finally:
         db.close()
+    return processed_count
 
 
-def poll_argos_clearance() -> None:
+def poll_argos_clearance() -> int:
     app_cfg = get_config()
     argos_cfg = app_cfg.get("argos", {})
     decision_cfg = DecisionConfig.from_app_config(app_cfg)
@@ -75,11 +78,12 @@ def poll_argos_clearance() -> None:
     try:
         count = adapter.crawl(db, on_deal=_on_deal)
         print(f"[SCHEDULER] argos: {count} new/changed item(s)")
+        return count
     finally:
         db.close()
 
 
-def poll_smyths_clearance() -> None:
+def poll_smyths_clearance() -> int:
     app_cfg = get_config()
     smyths_cfg = app_cfg.get("smyths", {})
     decision_cfg = DecisionConfig.from_app_config(app_cfg)
@@ -103,11 +107,12 @@ def poll_smyths_clearance() -> None:
     try:
         count = adapter.crawl(db, on_deal=_on_deal)
         print(f"[SCHEDULER] smyths: {count} new/changed item(s)")
+        return count
     finally:
         db.close()
 
 
-def poll_bq_clearance() -> None:
+def poll_bq_clearance() -> int:
     app_cfg = get_config()
     bq_cfg = app_cfg.get("bq", {})
     decision_cfg = DecisionConfig.from_app_config(app_cfg)
@@ -130,11 +135,12 @@ def poll_bq_clearance() -> None:
     try:
         count = adapter.crawl(db, on_deal=_on_deal)
         print(f"[SCHEDULER] bq: {count} new/changed item(s)")
+        return count
     finally:
         db.close()
 
 
-def poll_screwfix_clearance() -> None:
+def poll_screwfix_clearance() -> int:
     app_cfg = get_config()
     screwfix_cfg = app_cfg.get("screwfix", {})
     decision_cfg = DecisionConfig.from_app_config(app_cfg)
@@ -157,11 +163,12 @@ def poll_screwfix_clearance() -> None:
     try:
         count = adapter.crawl(db, on_deal=_on_deal)
         print(f"[SCHEDULER] screwfix: {count} new/changed item(s)")
+        return count
     finally:
         db.close()
 
 
-def poll_homebargains_clearance() -> None:
+def poll_homebargains_clearance() -> int:
     app_cfg = get_config()
     hb_cfg = app_cfg.get("homebargains", {})
     decision_cfg = DecisionConfig.from_app_config(app_cfg)
@@ -184,11 +191,12 @@ def poll_homebargains_clearance() -> None:
     try:
         count = adapter.crawl(db, on_deal=_on_deal)
         print(f"[SCHEDULER] homebargains: {count} new/changed item(s)")
+        return count
     finally:
         db.close()
 
 
-def poll_johnlewis_outlet() -> None:
+def poll_johnlewis_outlet() -> int:
     app_cfg = get_config()
     jl_cfg = app_cfg.get("johnlewis", {})
     decision_cfg = DecisionConfig.from_app_config(app_cfg)
@@ -211,11 +219,12 @@ def poll_johnlewis_outlet() -> None:
     try:
         count = adapter.crawl(db, on_deal=_on_deal)
         print(f"[SCHEDULER] johnlewis: {count} new/changed item(s)")
+        return count
     finally:
         db.close()
 
 
-def poll_pokemon_center() -> None:
+def poll_pokemon_center() -> int:
     app_cfg = get_config()
     pc_cfg = app_cfg.get("pokemon_center", {})
     decision_cfg = DecisionConfig.from_app_config(app_cfg)
@@ -239,6 +248,7 @@ def poll_pokemon_center() -> None:
     try:
         count = adapter.crawl(db, on_deal=_on_deal)
         print(f"[SCHEDULER] pokemon_center: {count} drop(s)")
+        return count
     finally:
         db.close()
 

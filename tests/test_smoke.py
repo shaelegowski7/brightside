@@ -1,7 +1,9 @@
 """Boot smoke test — proves `app.main:app` imports and starts without
 error, and /health responds with the right shape. Uses the sqlite test DB
 from conftest.py, so it needs no real Postgres/Keepa/Discord."""
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from app.main import app
 
@@ -77,6 +79,64 @@ def test_deals_json_responds_with_secret_header():
     resp = client.get("/deals.json", headers=_AUTH_HEADERS)
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+def test_crawl_requires_shared_secret():
+    resp = client.post("/crawl")
+    assert resp.status_code == 401
+
+
+def test_crawl_status_requires_shared_secret():
+    resp = client.get("/crawl/status")
+    assert resp.status_code == 401
+
+
+def test_crawl_triggers_and_status_reflects_it(monkeypatch):
+    from app import crawl_runner
+    monkeypatch.setattr(crawl_runner, "start_crawl", lambda: (True, {
+        "running": True, "started_at": "2026-07-29T00:00:00Z", "finished_at": None, "sources": [],
+    }))
+    resp = client.post("/crawl", headers=_AUTH_HEADERS)
+    assert resp.status_code == 200
+    assert resp.json()["started"] is True
+    assert resp.json()["running"] is True
+
+    monkeypatch.setattr(crawl_runner, "get_status", lambda: {
+        "running": False, "started_at": "2026-07-29T00:00:00Z", "finished_at": "2026-07-29T00:05:00Z", "sources": [],
+    })
+    resp2 = client.get("/crawl/status", headers=_AUTH_HEADERS)
+    assert resp2.status_code == 200
+    assert resp2.json()["running"] is False
+
+
+def test_crawl_ws_rejects_wrong_secret():
+    with client.websocket_connect("/crawl/ws") as ws:
+        ws.send_text("wrong-secret")
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_json()
+
+
+def test_crawl_ws_sends_current_status_after_correct_secret(monkeypatch):
+    from app import crawl_runner
+    fake_status = {"running": False, "started_at": None, "finished_at": None, "sources": []}
+    monkeypatch.setattr(crawl_runner, "get_status", lambda: fake_status)
+
+    with client.websocket_connect("/crawl/ws") as ws:
+        ws.send_text("test-shared-secret")
+        data = ws.receive_json()
+    assert data == fake_status
+
+
+def test_crawl_ws_rejects_when_no_message_sent_in_time(monkeypatch):
+    # A client that connects but never sends the secret must not hang the
+    # server (or start streaming status) forever -- shrink the real 10s
+    # timeout so the test doesn't have to wait for it.
+    import app.main as main_module
+    monkeypatch.setattr(main_module, "_CRAWL_WS_AUTH_TIMEOUT_S", 0.05)
+
+    with client.websocket_connect("/crawl/ws") as ws:
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_json()
 
 
 def _seed_scored_product(db_session, asin: str) -> None:
