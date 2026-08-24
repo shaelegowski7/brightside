@@ -3,6 +3,7 @@ scheduler startup live in main.py, DB session handling in database.py.
 Schema is Alembic-managed (`alembic upgrade head` runs as the Railway
 release step — see Procfile), not create_all(), per this project's stack."""
 import asyncio
+import hmac
 
 from fastapi import Cookie, Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -57,7 +58,7 @@ def deals_dashboard(db: Session = Depends(get_db), deals_secret: str | None = Co
 @app.post("/deals/login")
 def deals_login(body: schemas.DealsLogin):
     expected = get_settings().pwa_shared_secret
-    if not expected or body.secret != expected:
+    if not expected or not body.secret or not hmac.compare_digest(body.secret, expected):
         raise HTTPException(status_code=401, detail="unauthorized")
     resp = JSONResponse({"ok": True})
     # Cookie holds the secret itself -- no session store, matching this
@@ -154,7 +155,8 @@ def crawl_status(_: None = Depends(auth.require_shared_secret)):
     return crawl_runner.get_status()
 
 
-_CRAWL_WS_POLL_INTERVAL_S = 0.3
+_CRAWL_WS_ACTIVE_POLL_INTERVAL_S = 0.3
+_CRAWL_WS_IDLE_POLL_INTERVAL_S = 3.0
 _CRAWL_WS_AUTH_TIMEOUT_S = 10.0
 
 
@@ -174,7 +176,11 @@ async def crawl_ws(websocket: WebSocket):
     asyncio.run_coroutine_threadsafe bridging from a plain thread, real
     complexity for a 3-user tool) and only sends when it actually changed,
     so the client gets near-real-time updates without the server hammering
-    itself or the client re-requesting on its own timer."""
+    itself or the client re-requesting on its own timer. Polls at the fast
+    interval while a crawl is actually running and backs off to the slow
+    one otherwise -- the Green Deals tab stays connected for as long as it's
+    open (see pwa/src/components/CrawlPanel.tsx), which without this would
+    mean polling every 300ms indefinitely even with nothing happening."""
     await websocket.accept()
     try:
         secret = await asyncio.wait_for(websocket.receive_text(), timeout=_CRAWL_WS_AUTH_TIMEOUT_S)
@@ -185,7 +191,7 @@ async def crawl_ws(websocket: WebSocket):
         return
 
     expected = get_settings().pwa_shared_secret
-    if not expected or secret != expected:
+    if not expected or not secret or not hmac.compare_digest(secret, expected):
         await websocket.close(code=4001, reason="unauthorized")
         return
 
@@ -196,7 +202,8 @@ async def crawl_ws(websocket: WebSocket):
             if status != last_sent:
                 await websocket.send_json(status)
                 last_sent = status
-            await asyncio.sleep(_CRAWL_WS_POLL_INTERVAL_S)
+            poll_interval = _CRAWL_WS_ACTIVE_POLL_INTERVAL_S if status["running"] else _CRAWL_WS_IDLE_POLL_INTERVAL_S
+            await asyncio.sleep(poll_interval)
     except WebSocketDisconnect:
         pass
 

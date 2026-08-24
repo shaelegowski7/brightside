@@ -3,6 +3,8 @@ backend's BackgroundScheduler + CronTrigger/IntervalTrigger pattern: one
 job function, its own DB session, per-item try/except so one bad deal
 doesn't abort the batch, max_instances=1 + coalesce=True so a slow poll
 doesn't pile up overlapping runs."""
+from dataclasses import dataclass
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
@@ -54,203 +56,104 @@ def poll_hukd_feeds() -> int:
     return processed_count
 
 
-def poll_argos_clearance() -> int:
+@dataclass(frozen=True)
+class _ClearanceSource:
+    """One entry per retailer clearance scraper. `key` indexes both
+    config.yaml (category_urls/delays/enabled) and the source's own log
+    lines. `needs_api_key` is True for the sources whose adapter proxies
+    through ScraperAPI (see each adapter's own __init__ in app/sources/).
+    Adding a new clearance source is then a one-line addition to
+    _CLEARANCE_SOURCES + a thin poll_* wrapper below, instead of a whole new
+    copy-pasted poll function and start_scheduler() block -- this mirrors
+    crawl_runner.py's own _SOURCES table instead of duplicating it
+    independently, which is how the two drifted apart before."""
+
+    key: str
+    adapter_cls: type
+    needs_api_key: bool
+
+
+_CLEARANCE_SOURCES: dict[str, _ClearanceSource] = {
+    "argos": _ClearanceSource("argos", ArgosAdapter, needs_api_key=True),
+    "smyths": _ClearanceSource("smyths", SmythsAdapter, needs_api_key=True),
+    "bq": _ClearanceSource("bq", BQAdapter, needs_api_key=False),
+    "screwfix": _ClearanceSource("screwfix", ScrewfixAdapter, needs_api_key=False),
+    "homebargains": _ClearanceSource("homebargains", HomeBargainsAdapter, needs_api_key=False),
+    "johnlewis": _ClearanceSource("johnlewis", JohnLewisAdapter, needs_api_key=False),
+    "pokemon_center": _ClearanceSource("pokemon_center", PokemonCenterAdapter, needs_api_key=True),
+}
+
+
+def _run_clearance_poll(source: _ClearanceSource) -> int:
+    """Shared body for every poll_*_clearance/poll_pokemon_center function
+    below: build the adapter, open one DB session for the whole crawl, feed
+    each found item through the pipeline with its own try/except (so one bad
+    deal can't abort the crawl), and always close the session -- including
+    if adapter construction or build_fee_provider() itself raises, which the
+    previous per-source copies didn't guard (db was opened before their
+    try/finally)."""
     app_cfg = get_config()
-    argos_cfg = app_cfg.get("argos", {})
+    src_cfg = app_cfg.get(source.key, {})
     decision_cfg = DecisionConfig.from_app_config(app_cfg)
-    adapter = ArgosAdapter(
-        category_urls=argos_cfg["category_urls"],
-        api_key=get_settings().scraperapi_key,
-        min_delay_s=argos_cfg["min_delay_seconds"],
-        max_delay_s=argos_cfg["max_delay_seconds"],
+
+    kwargs = dict(
+        category_urls=src_cfg["category_urls"],
+        min_delay_s=src_cfg["min_delay_seconds"],
+        max_delay_s=src_cfg["max_delay_seconds"],
     )
+    if source.needs_api_key:
+        kwargs["api_key"] = get_settings().scraperapi_key
 
     db = SessionLocal()
-    fee_provider = fees.build_fee_provider(db, app_cfg)
-
-    def _on_deal(raw) -> None:
-        try:
-            pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
-        except Exception as e:
-            db.rollback()
-            print(f"[SCHEDULER] {raw.url}: processing error: {e}")
-
     try:
+        adapter = source.adapter_cls(**kwargs)
+        fee_provider = fees.build_fee_provider(db, app_cfg)
+
+        def _on_deal(raw) -> None:
+            try:
+                pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
+            except Exception as e:
+                db.rollback()
+                print(f"[SCHEDULER] {raw.url}: processing error: {e}")
+
         count = adapter.crawl(db, on_deal=_on_deal)
-        print(f"[SCHEDULER] argos: {count} new/changed item(s)")
+        print(f"[SCHEDULER] {source.key}: {count} new/changed item(s)")
         return count
     finally:
         db.close()
+
+
+# Thin named wrappers -- kept as real top-level functions (not dynamically
+# generated) because crawl_runner._SOURCES and the tests monkeypatch these
+# by exact name (getattr(scheduler, fn_name); monkeypatch.setattr(scheduler,
+# "poll_argos_clearance", ...)), and start_scheduler() below registers each
+# as an APScheduler job under id=<function name>.
+def poll_argos_clearance() -> int:
+    return _run_clearance_poll(_CLEARANCE_SOURCES["argos"])
 
 
 def poll_smyths_clearance() -> int:
-    app_cfg = get_config()
-    smyths_cfg = app_cfg.get("smyths", {})
-    decision_cfg = DecisionConfig.from_app_config(app_cfg)
-    adapter = SmythsAdapter(
-        category_urls=smyths_cfg["category_urls"],
-        api_key=get_settings().scraperapi_key,
-        min_delay_s=smyths_cfg["min_delay_seconds"],
-        max_delay_s=smyths_cfg["max_delay_seconds"],
-    )
-
-    db = SessionLocal()
-    fee_provider = fees.build_fee_provider(db, app_cfg)
-
-    def _on_deal(raw) -> None:
-        try:
-            pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
-        except Exception as e:
-            db.rollback()
-            print(f"[SCHEDULER] {raw.url}: processing error: {e}")
-
-    try:
-        count = adapter.crawl(db, on_deal=_on_deal)
-        print(f"[SCHEDULER] smyths: {count} new/changed item(s)")
-        return count
-    finally:
-        db.close()
+    return _run_clearance_poll(_CLEARANCE_SOURCES["smyths"])
 
 
 def poll_bq_clearance() -> int:
-    app_cfg = get_config()
-    bq_cfg = app_cfg.get("bq", {})
-    decision_cfg = DecisionConfig.from_app_config(app_cfg)
-    adapter = BQAdapter(
-        category_urls=bq_cfg["category_urls"],
-        min_delay_s=bq_cfg["min_delay_seconds"],
-        max_delay_s=bq_cfg["max_delay_seconds"],
-    )
-
-    db = SessionLocal()
-    fee_provider = fees.build_fee_provider(db, app_cfg)
-
-    def _on_deal(raw) -> None:
-        try:
-            pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
-        except Exception as e:
-            db.rollback()
-            print(f"[SCHEDULER] {raw.url}: processing error: {e}")
-
-    try:
-        count = adapter.crawl(db, on_deal=_on_deal)
-        print(f"[SCHEDULER] bq: {count} new/changed item(s)")
-        return count
-    finally:
-        db.close()
+    return _run_clearance_poll(_CLEARANCE_SOURCES["bq"])
 
 
 def poll_screwfix_clearance() -> int:
-    app_cfg = get_config()
-    screwfix_cfg = app_cfg.get("screwfix", {})
-    decision_cfg = DecisionConfig.from_app_config(app_cfg)
-    adapter = ScrewfixAdapter(
-        category_urls=screwfix_cfg["category_urls"],
-        min_delay_s=screwfix_cfg["min_delay_seconds"],
-        max_delay_s=screwfix_cfg["max_delay_seconds"],
-    )
-
-    db = SessionLocal()
-    fee_provider = fees.build_fee_provider(db, app_cfg)
-
-    def _on_deal(raw) -> None:
-        try:
-            pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
-        except Exception as e:
-            db.rollback()
-            print(f"[SCHEDULER] {raw.url}: processing error: {e}")
-
-    try:
-        count = adapter.crawl(db, on_deal=_on_deal)
-        print(f"[SCHEDULER] screwfix: {count} new/changed item(s)")
-        return count
-    finally:
-        db.close()
+    return _run_clearance_poll(_CLEARANCE_SOURCES["screwfix"])
 
 
 def poll_homebargains_clearance() -> int:
-    app_cfg = get_config()
-    hb_cfg = app_cfg.get("homebargains", {})
-    decision_cfg = DecisionConfig.from_app_config(app_cfg)
-    adapter = HomeBargainsAdapter(
-        category_urls=hb_cfg["category_urls"],
-        min_delay_s=hb_cfg["min_delay_seconds"],
-        max_delay_s=hb_cfg["max_delay_seconds"],
-    )
-
-    db = SessionLocal()
-    fee_provider = fees.build_fee_provider(db, app_cfg)
-
-    def _on_deal(raw) -> None:
-        try:
-            pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
-        except Exception as e:
-            db.rollback()
-            print(f"[SCHEDULER] {raw.url}: processing error: {e}")
-
-    try:
-        count = adapter.crawl(db, on_deal=_on_deal)
-        print(f"[SCHEDULER] homebargains: {count} new/changed item(s)")
-        return count
-    finally:
-        db.close()
+    return _run_clearance_poll(_CLEARANCE_SOURCES["homebargains"])
 
 
 def poll_johnlewis_outlet() -> int:
-    app_cfg = get_config()
-    jl_cfg = app_cfg.get("johnlewis", {})
-    decision_cfg = DecisionConfig.from_app_config(app_cfg)
-    adapter = JohnLewisAdapter(
-        category_urls=jl_cfg["category_urls"],
-        min_delay_s=jl_cfg["min_delay_seconds"],
-        max_delay_s=jl_cfg["max_delay_seconds"],
-    )
-
-    db = SessionLocal()
-    fee_provider = fees.build_fee_provider(db, app_cfg)
-
-    def _on_deal(raw) -> None:
-        try:
-            pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
-        except Exception as e:
-            db.rollback()
-            print(f"[SCHEDULER] {raw.url}: processing error: {e}")
-
-    try:
-        count = adapter.crawl(db, on_deal=_on_deal)
-        print(f"[SCHEDULER] johnlewis: {count} new/changed item(s)")
-        return count
-    finally:
-        db.close()
+    return _run_clearance_poll(_CLEARANCE_SOURCES["johnlewis"])
 
 
 def poll_pokemon_center() -> int:
-    app_cfg = get_config()
-    pc_cfg = app_cfg.get("pokemon_center", {})
-    decision_cfg = DecisionConfig.from_app_config(app_cfg)
-    adapter = PokemonCenterAdapter(
-        category_urls=pc_cfg["category_urls"],
-        api_key=get_settings().scraperapi_key,
-        min_delay_s=pc_cfg["min_delay_seconds"],
-        max_delay_s=pc_cfg["max_delay_seconds"],
-    )
-
-    db = SessionLocal()
-    fee_provider = fees.build_fee_provider(db, app_cfg)
-
-    def _on_deal(raw) -> None:
-        try:
-            pipeline.process_deal(db, raw, decision_cfg, fee_provider, app_cfg)
-        except Exception as e:
-            db.rollback()
-            print(f"[SCHEDULER] {raw.url}: processing error: {e}")
-
-    try:
-        count = adapter.crawl(db, on_deal=_on_deal)
-        print(f"[SCHEDULER] pokemon_center: {count} drop(s)")
-        return count
-    finally:
-        db.close()
+    return _run_clearance_poll(_CLEARANCE_SOURCES["pokemon_center"])
 
 
 def post_daily_summary() -> None:
@@ -298,96 +201,34 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
 
-    argos_cfg = app_cfg.get("argos", {})
-    if argos_cfg.get("enabled", False):
-        argos_interval = argos_cfg["poll_interval_minutes"]
+    # (config key, poll function) -- one entry per _CLEARANCE_SOURCES source,
+    # registered identically instead of seven copy-pasted enable/add_job
+    # blocks. Job id matches the function's own name, same convention as
+    # before (crawl_runner.py's manual-trigger path calls these same
+    # functions by name via getattr(scheduler, fn_name)).
+    clearance_jobs = [
+        ("argos", poll_argos_clearance),
+        ("smyths", poll_smyths_clearance),
+        ("bq", poll_bq_clearance),
+        ("screwfix", poll_screwfix_clearance),
+        ("homebargains", poll_homebargains_clearance),
+        ("johnlewis", poll_johnlewis_outlet),
+        ("pokemon_center", poll_pokemon_center),
+    ]
+    for cfg_key, poll_fn in clearance_jobs:
+        src_cfg = app_cfg.get(cfg_key, {})
+        if not src_cfg.get("enabled", False):
+            continue
+        interval = src_cfg["poll_interval_minutes"]
         scheduler.add_job(
-            poll_argos_clearance,
-            IntervalTrigger(minutes=argos_interval),
-            id="poll_argos_clearance",
+            poll_fn,
+            IntervalTrigger(minutes=interval),
+            id=poll_fn.__name__,
             max_instances=1,
             coalesce=True,
             replace_existing=True,
         )
-        print(f"[SCHEDULER] argos clearance enabled, polling every {argos_interval}m")
-
-    smyths_cfg = app_cfg.get("smyths", {})
-    if smyths_cfg.get("enabled", False):
-        smyths_interval = smyths_cfg["poll_interval_minutes"]
-        scheduler.add_job(
-            poll_smyths_clearance,
-            IntervalTrigger(minutes=smyths_interval),
-            id="poll_smyths_clearance",
-            max_instances=1,
-            coalesce=True,
-            replace_existing=True,
-        )
-        print(f"[SCHEDULER] smyths clearance enabled, polling every {smyths_interval}m")
-
-    bq_cfg = app_cfg.get("bq", {})
-    if bq_cfg.get("enabled", False):
-        bq_interval = bq_cfg["poll_interval_minutes"]
-        scheduler.add_job(
-            poll_bq_clearance,
-            IntervalTrigger(minutes=bq_interval),
-            id="poll_bq_clearance",
-            max_instances=1,
-            coalesce=True,
-            replace_existing=True,
-        )
-        print(f"[SCHEDULER] bq clearance enabled, polling every {bq_interval}m")
-
-    screwfix_cfg = app_cfg.get("screwfix", {})
-    if screwfix_cfg.get("enabled", False):
-        screwfix_interval = screwfix_cfg["poll_interval_minutes"]
-        scheduler.add_job(
-            poll_screwfix_clearance,
-            IntervalTrigger(minutes=screwfix_interval),
-            id="poll_screwfix_clearance",
-            max_instances=1,
-            coalesce=True,
-            replace_existing=True,
-        )
-        print(f"[SCHEDULER] screwfix clearance enabled, polling every {screwfix_interval}m")
-
-    hb_cfg = app_cfg.get("homebargains", {})
-    if hb_cfg.get("enabled", False):
-        hb_interval = hb_cfg["poll_interval_minutes"]
-        scheduler.add_job(
-            poll_homebargains_clearance,
-            IntervalTrigger(minutes=hb_interval),
-            id="poll_homebargains_clearance",
-            max_instances=1,
-            coalesce=True,
-            replace_existing=True,
-        )
-        print(f"[SCHEDULER] homebargains clearance enabled, polling every {hb_interval}m")
-
-    jl_cfg = app_cfg.get("johnlewis", {})
-    if jl_cfg.get("enabled", False):
-        jl_interval = jl_cfg["poll_interval_minutes"]
-        scheduler.add_job(
-            poll_johnlewis_outlet,
-            IntervalTrigger(minutes=jl_interval),
-            id="poll_johnlewis_outlet",
-            max_instances=1,
-            coalesce=True,
-            replace_existing=True,
-        )
-        print(f"[SCHEDULER] johnlewis outlet enabled, polling every {jl_interval}m")
-
-    pc_cfg = app_cfg.get("pokemon_center", {})
-    if pc_cfg.get("enabled", False):
-        pc_interval = pc_cfg["poll_interval_minutes"]
-        scheduler.add_job(
-            poll_pokemon_center,
-            IntervalTrigger(minutes=pc_interval),
-            id="poll_pokemon_center",
-            max_instances=1,
-            coalesce=True,
-            replace_existing=True,
-        )
-        print(f"[SCHEDULER] pokemon_center enabled, polling every {pc_interval}m")
+        print(f"[SCHEDULER] {cfg_key} enabled, polling every {interval}m")
 
     monitoring_cfg = app_cfg.get("monitoring", {})
     if monitoring_cfg.get("daily_summary_enabled", True):
