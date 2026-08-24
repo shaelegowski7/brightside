@@ -161,6 +161,7 @@ def post_daily_summary() -> None:
     monitoring_cfg = app_cfg.get("monitoring", {})
     hours = monitoring_cfg.get("summary_window_hours", 24)
     token_budget = monitoring_cfg.get("daily_token_budget_alert")
+    blocked_rate_alert_pct = monitoring_cfg.get("blocked_rate_alert_pct")
 
     db = SessionLocal()
     try:
@@ -168,7 +169,9 @@ def post_daily_summary() -> None:
     finally:
         db.close()
 
-    embed = discord_notifier.build_summary_embed(summary, token_budget_alert=token_budget)
+    embed = discord_notifier.build_summary_embed(
+        summary, token_budget_alert=token_budget, blocked_rate_alert_pct=blocked_rate_alert_pct
+    )
     ok = discord_notifier.send_ping(get_settings().discord_webhook_url, embed)
     print(f"[SCHEDULER] daily summary posted: {ok}")
 
@@ -177,10 +180,14 @@ def post_weekly_summary() -> None:
     app_cfg = get_config()
     monitoring_cfg = app_cfg.get("monitoring", {})
     hours = monitoring_cfg.get("weekly_summary_window_hours", 168)
+    # .get(), not [...] -- unlike the scoring path, a missing/incomplete
+    # thresholds block here should degrade to "no hit rate this week", not
+    # crash the whole summary job.
+    min_roi = (app_cfg.get("thresholds") or {}).get("min_roi")
 
     db = SessionLocal()
     try:
-        summary = monitoring.build_weekly_summary(db, hours=hours)
+        summary = monitoring.build_weekly_summary(db, hours=hours, min_roi_threshold=min_roi)
     finally:
         db.close()
 

@@ -116,21 +116,35 @@ def build_unverified_embed(
     return embed
 
 
-def build_summary_embed(summary: dict, token_budget_alert: int | None = None) -> dict:
+def build_summary_embed(
+    summary: dict, token_budget_alert: int | None = None, blocked_rate_alert_pct: float | None = None
+) -> dict:
     """Daily funnel + Keepa token-spend digest -- see monitoring.build_summary
     for the data shape. `token_budget_alert` (config.yaml monitoring.
     daily_token_budget_alert) flips the embed amber when exceeded so an
-    over-budget day is visible without reading numbers closely."""
+    over-budget day is visible without reading numbers closely.
+    `blocked_rate_alert_pct` does the same for a source whose fetch_blocked
+    share of its own deals crosses the configured bar -- resolver.py's
+    docstring notes ~27% blocked was the normal HUKD baseline in production
+    (downstream retailers blocking us, not HUKD itself), so this is meant to
+    catch a source's bot-protection getting meaningfully worse than that
+    baseline, not the ordinary background rate."""
     by_source = summary["by_source"]
     tokens = summary["keepa_tokens"]
 
     lines = []
+    any_source_over_blocked = False
     for source in sorted(by_source):
         counts = by_source[source]
         total = sum(counts.values())
         scored = counts.get("stage2_scored", 0)
         pinged = counts.get("pinged", 0) + counts.get("unverified_pinged", 0)
-        lines.append(f"**{source}**: {total} seen · {scored} scored · {pinged} pinged")
+        blocked = counts.get("fetch_blocked", 0)
+        blocked_rate = (blocked / total) if total else 0.0
+        if blocked_rate_alert_pct is not None and blocked_rate > blocked_rate_alert_pct:
+            any_source_over_blocked = True
+        blocked_suffix = f" · {blocked} blocked ({blocked_rate:.0%})" if blocked else ""
+        lines.append(f"**{source}**: {total} seen · {scored} scored · {pinged} pinged{blocked_suffix}")
     source_text = "\n".join(lines) if lines else "No deals seen in this window."
 
     total_tokens = tokens["total_consumed"]
@@ -139,13 +153,23 @@ def build_summary_embed(summary: dict, token_budget_alert: int | None = None) ->
         f"{total_tokens} (budget {token_budget_alert})" if token_budget_alert is not None else str(total_tokens)
     )
 
+    fields = [
+        _field("Sources", source_text, inline=False),
+        _field("Keepa tokens used", token_str, inline=False),
+    ]
+    latency = summary.get("ping_latency")
+    if latency and latency.get("pings_measured"):
+        fields.append(_field(
+            "Ping latency (first seen → pinged)",
+            f"avg {latency['avg_latency_minutes']:.0f}m · max {latency['max_latency_minutes']:.0f}m "
+            f"({latency['pings_measured']} pings)",
+            inline=False,
+        ))
+
     embed = {
         "title": f"Daily summary — last {summary['hours']}h",
-        "color": COLOR_AMBER if over_budget else COLOR_GREEN,
-        "fields": [
-            _field("Sources", source_text, inline=False),
-            _field("Keepa tokens used", token_str, inline=False),
-        ],
+        "color": COLOR_AMBER if (over_budget or any_source_over_blocked) else COLOR_GREEN,
+        "fields": fields,
     }
     return embed
 
@@ -155,7 +179,11 @@ def build_weekly_summary_embed(summary: dict) -> dict:
     (hit rate, realised vs predicted ROI)") -- direct sibling of
     build_summary_embed, but flags underperformance vs predictions rather
     than Keepa token budget. See monitoring.build_weekly_summary for the
-    data shape."""
+    data shape. Hit rate and purchase conversion are informational fields
+    only -- they don't affect the embed's color, since both need config-
+    driven thresholds (min_roi, a "good enough" conversion bar) that don't
+    have an obvious default the way the existing realised-vs-predicted
+    comparison does."""
     outcomes = summary["outcomes_recorded"]
     avg_realised = summary["avg_realised_roi"]
     avg_predicted = summary["avg_predicted_roi"]
@@ -172,6 +200,9 @@ def build_weekly_summary_embed(summary: dict) -> dict:
         _field("Outcomes recorded", str(outcomes)),
         _field("Avg realised ROI", _pct(avg_realised)),
         _field("Avg predicted ROI", _pct(avg_predicted)),
+        _field("Hit rate", _pct(summary.get("hit_rate"))),
+        _field("Deals confirmed this week", str(summary.get("good_scores", 0))),
+        _field("Purchase conversion", _pct(summary.get("purchase_conversion_rate"))),
     ]
     return {
         "title": f"Weekly summary — last {summary['hours']}h",

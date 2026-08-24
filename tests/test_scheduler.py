@@ -71,7 +71,7 @@ def test_blocklist_match_is_case_insensitive(monkeypatch):
 
 def test_post_daily_summary_passes_config_through_to_embed_and_posts(monkeypatch):
     app_cfg = {
-        "monitoring": {"summary_window_hours": 12, "daily_token_budget_alert": 999},
+        "monitoring": {"summary_window_hours": 12, "daily_token_budget_alert": 999, "blocked_rate_alert_pct": 0.5},
         "discord": {},
     }
     monkeypatch.setattr(scheduler, "get_config", lambda: app_cfg)
@@ -82,8 +82,8 @@ def test_post_daily_summary_passes_config_through_to_embed_and_posts(monkeypatch
 
     embed_calls = []
 
-    def fake_build_embed(summary, token_budget_alert=None):
-        embed_calls.append((summary, token_budget_alert))
+    def fake_build_embed(summary, token_budget_alert=None, blocked_rate_alert_pct=None):
+        embed_calls.append((summary, token_budget_alert, blocked_rate_alert_pct))
         return {"title": "fake embed"}
 
     monkeypatch.setattr(discord_notifier, "build_summary_embed", fake_build_embed)
@@ -94,17 +94,20 @@ def test_post_daily_summary_passes_config_through_to_embed_and_posts(monkeypatch
     scheduler.post_daily_summary()
 
     assert build_summary_calls == [12]
-    assert embed_calls == [({"fake": "summary"}, 999)]
+    assert embed_calls == [({"fake": "summary"}, 999, 0.5)]
     assert send_calls == [("https://discord.example/hook", {"title": "fake embed"})]
 
 
 def test_post_weekly_summary_passes_config_through_to_embed_and_posts(monkeypatch):
-    app_cfg = {"monitoring": {"weekly_summary_window_hours": 72}}
+    app_cfg = {"monitoring": {"weekly_summary_window_hours": 72}, "thresholds": {"min_roi": 0.3}}
     monkeypatch.setattr(scheduler, "get_config", lambda: app_cfg)
     monkeypatch.setattr(scheduler, "get_settings", lambda: type("S", (), {"discord_webhook_url": "https://discord.example/hook"})())
 
     build_weekly_calls = []
-    monkeypatch.setattr(monitoring, "build_weekly_summary", lambda db, hours: build_weekly_calls.append(hours) or {"fake": "weekly"})
+    monkeypatch.setattr(
+        monitoring, "build_weekly_summary",
+        lambda db, hours, min_roi_threshold=None: build_weekly_calls.append((hours, min_roi_threshold)) or {"fake": "weekly"},
+    )
 
     embed_calls = []
     monkeypatch.setattr(discord_notifier, "build_weekly_summary_embed", lambda summary: embed_calls.append(summary) or {"title": "fake weekly embed"})
@@ -114,6 +117,26 @@ def test_post_weekly_summary_passes_config_through_to_embed_and_posts(monkeypatc
 
     scheduler.post_weekly_summary()
 
-    assert build_weekly_calls == [72]
+    assert build_weekly_calls == [(72, 0.3)]
     assert embed_calls == [{"fake": "weekly"}]
     assert send_calls == [("https://discord.example/hook", {"title": "fake weekly embed"})]
+
+
+def test_post_weekly_summary_tolerates_missing_thresholds_config(monkeypatch):
+    """thresholds isn't in monitoring_cfg's own block -- a config fixture
+    missing it entirely shouldn't crash the weekly job, just skip hit rate."""
+    app_cfg = {"monitoring": {"weekly_summary_window_hours": 72}}
+    monkeypatch.setattr(scheduler, "get_config", lambda: app_cfg)
+    monkeypatch.setattr(scheduler, "get_settings", lambda: type("S", (), {"discord_webhook_url": "https://discord.example/hook"})())
+
+    build_weekly_calls = []
+    monkeypatch.setattr(
+        monitoring, "build_weekly_summary",
+        lambda db, hours, min_roi_threshold=None: build_weekly_calls.append((hours, min_roi_threshold)) or {"fake": "weekly"},
+    )
+    monkeypatch.setattr(discord_notifier, "build_weekly_summary_embed", lambda summary: {"title": "fake weekly embed"})
+    monkeypatch.setattr(discord_notifier, "send_ping", lambda url, embed: True)
+
+    scheduler.post_weekly_summary()
+
+    assert build_weekly_calls == [(72, None)]

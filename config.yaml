@@ -322,6 +322,13 @@ monitoring:
   # baseline but comfortably below the hard ceiling so an alert means
   # something real -- tune down once a few real days of data exist.
   daily_token_budget_alert: 6000
+  # Flip the daily summary amber if any single source's fetch_blocked share
+  # of its own deals exceeds this. resolver.py's docstring notes ~27%
+  # blocked was the normal HUKD baseline in production (downstream
+  # retailers blocking us, not HUKD itself) -- set above that background
+  # rate so this means a source's bot-protection got meaningfully worse,
+  # not the ordinary noise floor.
+  blocked_rate_alert_pct: 0.5
 
 # Category-based fee estimate fallback (SP-API not live yet). Ballpark figures
 # based on Amazon UK's public referral-fee schedule and FBA size tiers — verify

@@ -125,6 +125,51 @@ def test_build_summary_embed_no_deals_in_window():
     assert embed["fields"][0]["value"] == "No deals seen in this window."
 
 
+def test_build_summary_embed_blocked_rate_over_threshold_is_amber():
+    summary = {
+        "hours": 24,
+        "by_source": {"argos": {"stage2_scored": 1, "fetch_blocked": 9}},  # 90% blocked
+        "keepa_tokens": {"total_consumed": 100, "by_stage": {}},
+    }
+    embed = build_summary_embed(summary, blocked_rate_alert_pct=0.5)
+    assert embed["color"] == 0xF1C40F
+    assert "blocked" in embed["fields"][0]["value"]
+
+
+def test_build_summary_embed_blocked_rate_under_threshold_stays_green():
+    summary = {
+        "hours": 24,
+        "by_source": {"argos": {"stage2_scored": 9, "fetch_blocked": 1}},  # 10% blocked
+        "keepa_tokens": {"total_consumed": 100, "by_stage": {}},
+    }
+    embed = build_summary_embed(summary, blocked_rate_alert_pct=0.5)
+    assert embed["color"] == 0x2ECC71
+
+
+def test_build_summary_embed_no_blocked_rate_threshold_never_flags():
+    summary = {
+        "hours": 24,
+        "by_source": {"argos": {"stage2_scored": 1, "fetch_blocked": 9}},
+        "keepa_tokens": {"total_consumed": 100, "by_stage": {}},
+    }
+    embed = build_summary_embed(summary)
+    assert embed["color"] == 0x2ECC71
+
+
+def test_build_summary_embed_includes_ping_latency_field_when_present():
+    summary = _summary(total_tokens=100)
+    summary["ping_latency"] = {"pings_measured": 3, "avg_latency_minutes": 12.4, "max_latency_minutes": 40.0}
+    embed = build_summary_embed(summary)
+    latency_field = next(f for f in embed["fields"] if "latency" in f["name"].lower())
+    assert "12m" in latency_field["value"]
+    assert "40m" in latency_field["value"]
+
+
+def test_build_summary_embed_omits_ping_latency_field_when_absent():
+    embed = build_summary_embed(_summary(total_tokens=100))
+    assert not any("latency" in f["name"].lower() for f in embed["fields"])
+
+
 def _weekly_summary(avg_realised, avg_predicted, outcomes=1) -> dict:
     return {
         "hours": 168, "pings": 5, "purchases_logged": 2, "outcomes_recorded": outcomes,
@@ -146,3 +191,23 @@ def test_build_weekly_summary_embed_no_outcomes_is_green():
     embed = build_weekly_summary_embed(_weekly_summary(avg_realised=None, avg_predicted=None, outcomes=0))
     assert embed["color"] == 0x2ECC71
     assert embed["fields"][2]["value"] == "0"
+
+
+def test_build_weekly_summary_embed_includes_hit_rate_and_conversion_fields():
+    summary = _weekly_summary(avg_realised=0.6, avg_predicted=0.4)
+    summary["hit_rate"] = 0.75
+    summary["good_scores"] = 4
+    summary["purchase_conversion_rate"] = 0.5
+    embed = build_weekly_summary_embed(summary)
+    values = {f["name"]: f["value"] for f in embed["fields"]}
+    assert values["Hit rate"] == "75%"
+    assert values["Deals confirmed this week"] == "4"
+    assert values["Purchase conversion"] == "50%"
+
+
+def test_build_weekly_summary_embed_hit_rate_defaults_to_dash_when_absent():
+    embed = build_weekly_summary_embed(_weekly_summary(avg_realised=0.6, avg_predicted=0.4))
+    values = {f["name"]: f["value"] for f in embed["fields"]}
+    assert values["Hit rate"] == "—"
+    assert values["Deals confirmed this week"] == "0"
+    assert values["Purchase conversion"] == "—"
