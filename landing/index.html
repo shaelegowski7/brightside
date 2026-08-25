@@ -50,8 +50,14 @@
     font-size: 15px; font-weight: 600; padding: 12px 28px; border-radius: 8px;
   }
   a.cta:hover { opacity: 0.9; }
-  p.contact { color: var(--muted); font-size: 13px; margin: 28px 0 0; }
-  p.contact a { color: var(--muted); }
+  .contact { color: var(--muted); font-size: 13px; margin: 28px 0 0; }
+  .contact p { margin: 4px 0; }
+  .contact a { color: var(--muted); }
+  .ebay-link { display: inline-flex; vertical-align: middle; }
+  .ebay-logo {
+    height: 14px; width: auto; display: block;
+    background: #ffffff; border-radius: 3px; padding: 3px 6px;
+  }
 </style>
 </head>
 <body>
@@ -73,7 +79,10 @@
     live Amazon marketplace data to identify resale opportunities worth pursuing.
   </p>
   <a class="cta" href="https://app.brightsidecommerce.co.uk">Open Scanner</a>
-  <p class="contact">Contact: <a href="mailto:sales@brightsidecommerce.co.uk">sales@brightsidecommerce.co.uk</a></p>
+  <div class="contact">
+    <p>Also selling on <a href="https://www.ebay.co.uk/usr/brightsidecommerce" target="_blank" rel="noopener" class="ebay-link"><img src="ebay-logo.png" alt="eBay" class="ebay-logo"></a> as Brightside Commerce.</p>
+    <p>Contact: <a href="mailto:sales@brightsidecommerce.co.uk">sales@brightsidecommerce.co.uk</a></p>
+  </div>
 </div>
 </body>
 </html>
