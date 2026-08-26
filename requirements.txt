@@ -12,3 +12,4 @@ keepa
 requests
 beautifulsoup4
 websockets
+supabase

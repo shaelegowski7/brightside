@@ -3,15 +3,14 @@ scheduler startup live in main.py, DB session handling in database.py.
 Schema is Alembic-managed (`alembic upgrade head` runs as the Railway
 release step — see Procfile), not create_all(), per this project's stack."""
 import asyncio
-import hmac
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import RedirectResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from . import auth, auth_monitor, crawl_runner, dashboard, monitoring, purchases, scan, schemas
+from . import auth, crawl_runner, dashboard, monitoring, purchases, scan, schemas
 from .config import get_config, get_settings
 from .database import engine, get_db
 from .decision.engine import DecisionConfig
@@ -43,46 +42,24 @@ def status_summary(hours: int = 24, db: Session = Depends(get_db)):
     return monitoring.build_summary(db, hours=hours)
 
 
-DEALS_COOKIE = "deals_secret"
-
-
-@app.get("/deals", response_class=HTMLResponse)
-def deals_dashboard(db: Session = Depends(get_db), deals_secret: str | None = Cookie(default=None)):
-    expected = get_settings().pwa_shared_secret
-    if not expected or deals_secret != expected:
-        return dashboard.render_login_page()
-    rows = dashboard.get_confirmed_deals(db)
-    return dashboard.render_page(rows)
-
-
-@app.post("/deals/login")
-def deals_login(body: schemas.DealsLogin):
-    expected = get_settings().pwa_shared_secret
-    if not expected:
-        raise HTTPException(status_code=401, detail="unauthorized")
-    if not body.secret or not hmac.compare_digest(body.secret, expected):
-        auth_monitor.record_failed_attempt("deals_login")
-        raise HTTPException(status_code=401, detail="unauthorized")
-    resp = JSONResponse({"ok": True})
-    # Cookie holds the secret itself -- no session store, matching this
-    # app's single-shared-secret model (see auth.py). httponly blocks JS
-    # access; secure is relaxed only in development so local http testing
-    # (no TLS) still works.
-    resp.set_cookie(
-        key=DEALS_COOKIE,
-        value=body.secret,
-        httponly=True,
-        samesite="lax",
-        secure=get_settings().environment != "development",
-        max_age=60 * 60 * 24 * 30,
-    )
-    return resp
+@app.get("/deals")
+def deals_dashboard():
+    """Retired standalone HTML dashboard -- the PWA's own "Green Deals" tab
+    (pwa/src/components/ConfirmedDeals.tsx) shows the same data via
+    /deals.json and now sits behind real per-user Supabase login + MFA, so
+    a second, separately-authenticated surface for the same data was no
+    longer worth maintaining. Redirects to the PWA rather than 404ing --
+    anyone with this URL bookmarked lands somewhere useful."""
+    pwa_origin = get_settings().pwa_origin
+    if not pwa_origin:
+        raise HTTPException(status_code=404, detail="not found")
+    return RedirectResponse(pwa_origin)
 
 
 @app.get("/deals.json", response_model=list[schemas.ConfirmedDeal])
-def deals_json(db: Session = Depends(get_db), _: None = Depends(auth.require_shared_secret)):
-    """Same query as /deals, as JSON -- feeds the PWA's confirmed-deals
-    view, which already sends X-Shared-Secret (see pwa/src/api.ts)."""
+def deals_json(db: Session = Depends(get_db), _: auth.AuthedUser = Depends(auth.require_user)):
+    """Same query the old /deals HTML dashboard used, as JSON -- feeds the
+    PWA's confirmed-deals view (see pwa/src/api.ts)."""
     rows = dashboard.get_confirmed_deals(db)
     return [
         schemas.ConfirmedDeal(
@@ -107,7 +84,7 @@ def deals_json(db: Session = Depends(get_db), _: None = Depends(auth.require_sha
 
 @app.post("/purchases")
 def create_purchase(
-    body: schemas.PurchaseCreate, db: Session = Depends(get_db), _: None = Depends(auth.require_shared_secret)
+    body: schemas.PurchaseCreate, db: Session = Depends(get_db), _: auth.AuthedUser = Depends(auth.require_user)
 ):
     try:
         purchase = purchases.log_purchase(db, body.asin, body.qty, body.actual_buy_price, body.notes)
@@ -121,7 +98,7 @@ def create_purchase(
 
 @app.post("/outcomes")
 def create_outcome(
-    body: schemas.OutcomeCreate, db: Session = Depends(get_db), _: None = Depends(auth.require_shared_secret)
+    body: schemas.OutcomeCreate, db: Session = Depends(get_db), _: auth.AuthedUser = Depends(auth.require_user)
 ):
     try:
         outcome = purchases.log_outcome(
@@ -139,7 +116,7 @@ def create_outcome(
 
 @app.post("/scan", response_model=schemas.ScanResponse)
 def create_scan(
-    body: schemas.ScanRequest, db: Session = Depends(get_db), _: None = Depends(auth.require_shared_secret)
+    body: schemas.ScanRequest, db: Session = Depends(get_db), _: auth.AuthedUser = Depends(auth.require_user)
 ):
     app_cfg = get_config()
     decision_cfg = DecisionConfig.from_app_config(app_cfg)
@@ -148,13 +125,13 @@ def create_scan(
 
 
 @app.post("/crawl")
-def trigger_crawl(_: None = Depends(auth.require_shared_secret)):
+def trigger_crawl(_: auth.AuthedUser = Depends(auth.require_user)):
     started, status = crawl_runner.start_crawl()
     return {"started": started, **status}
 
 
 @app.get("/crawl/status")
-def crawl_status(_: None = Depends(auth.require_shared_secret)):
+def crawl_status(_: auth.AuthedUser = Depends(auth.require_user)):
     return crawl_runner.get_status()
 
 
@@ -166,13 +143,13 @@ _CRAWL_WS_AUTH_TIMEOUT_S = 10.0
 @app.websocket("/crawl/ws")
 async def crawl_ws(websocket: WebSocket):
     """Live crawl status, replacing the PWA's old fixed-interval REST
-    polling. Auth can't use the X-Shared-Secret header /crawl and
+    polling. Auth can't use the Authorization header /crawl and
     /crawl.json use -- the browser's native WebSocket API has no way to set
-    custom headers on the handshake -- and a ?secret= query param would put
+    custom headers on the handshake -- and a ?token= query param would put
     it in server/proxy logs and browser history, exactly what auth.py's
-    header-not-query-param header choice exists to avoid. So the secret is
-    sent as the first text message after connecting instead, checked before
-    anything else happens.
+    header-not-query-param choice on every other route exists to avoid. So
+    the Supabase access token is sent as the first text message after
+    connecting instead, checked before anything else happens.
 
     Pushes crawl_runner's in-memory state on a short internal poll (not
     true pub/sub off the background crawl thread -- that would need
@@ -186,20 +163,22 @@ async def crawl_ws(websocket: WebSocket):
     mean polling every 300ms indefinitely even with nothing happening."""
     await websocket.accept()
     try:
-        secret = await asyncio.wait_for(websocket.receive_text(), timeout=_CRAWL_WS_AUTH_TIMEOUT_S)
+        token = await asyncio.wait_for(websocket.receive_text(), timeout=_CRAWL_WS_AUTH_TIMEOUT_S)
     except asyncio.TimeoutError:
-        await websocket.close(code=4001, reason="no secret received in time")
+        await websocket.close(code=4001, reason="no token received in time")
         return
     except WebSocketDisconnect:
         return
 
-    expected = get_settings().pwa_shared_secret
-    if not expected:
-        await websocket.close(code=4001, reason="unauthorized")
-        return
-    if not secret or not hmac.compare_digest(secret, expected):
-        auth_monitor.record_failed_attempt("crawl_ws")
-        await websocket.close(code=4001, reason="unauthorized")
+    try:
+        # auth.authenticate()'s token-verification step is a blocking
+        # network call (supabase-py, no async client) -- this handler is a
+        # genuine async def sharing the event loop with every other
+        # request, so run it off-thread rather than stalling everything
+        # else in flight for the round-trip.
+        await asyncio.to_thread(auth.authenticate, token)
+    except auth.AuthError as e:
+        await websocket.close(code=4001, reason=e.reason)
         return
 
     last_sent: dict | None = None

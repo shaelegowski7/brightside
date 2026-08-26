@@ -5,9 +5,9 @@ the team detects, responds to, and reports security incidents.
 
 ## Roles
 
-- **Primary responder**: [name] — owns the Railway, Vercel, GitHub, and
-  Amazon Seller Central accounts, and the shared secret. First point of
-  contact for any suspected incident.
+- **Primary responder**: [name] — owns the Railway, Vercel, GitHub,
+  Supabase, and Amazon Seller Central accounts. First point of contact
+  for any suspected incident.
 - **Backup responder**: [name] — can rotate credentials and access
   infrastructure if the primary responder is unavailable.
 - Any team member who notices anything suspicious (an unexpected
@@ -16,8 +16,9 @@ the team detects, responds to, and reports security incidents.
 
 ## What counts as an incident
 
-- Unauthorized access to the shared secret, the database, or the
-  Railway / Vercel / GitHub / Amazon Seller Central accounts
+- Unauthorized access to a team member's account (Supabase/email/MFA
+  compromise), the database, or the Railway / Vercel / GitHub / Amazon
+  Seller Central accounts
 - Credential exposure — committed to git, leaked in logs, or shared
   outside the team
 - Unexpected or unauthorized changes to deployed code or infrastructure
@@ -26,9 +27,11 @@ the team detects, responds to, and reports security incidents.
 
 ## Response procedure
 
-1. **Contain** — rotate the affected credential(s) immediately (shared
-   secret, Railway/Vercel/Supabase tokens, SP-API refresh token) and
-   revoke any compromised sessions.
+1. **Contain** — for a compromised user account, revoke the affected
+   user's Supabase sessions (Admin API `auth.admin.sign_out(user_id)` or
+   the dashboard's "Sign out user" action) and force a password reset;
+   for infrastructure credentials, rotate them immediately (Railway/
+   Vercel/Supabase service tokens, SP-API refresh token).
 2. **Assess** — determine what was actually accessed, and whether it
    included Amazon Information.
 3. **Notify**:

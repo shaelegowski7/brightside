@@ -40,10 +40,6 @@ class ScanResponse(BaseModel):
     amazon_url: str | None = None
 
 
-class DealsLogin(BaseModel):
-    secret: str
-
-
 class ConfirmedDeal(BaseModel):
     """JSON twin of dashboard.DealRow -- powers the PWA's confirmed-deals
     view, same underlying query as the /deals HTML dashboard."""

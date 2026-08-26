@@ -19,9 +19,19 @@ class Settings:
     database_url: str
     keepa_api_key: str
     discord_webhook_url: str
-    pwa_shared_secret: str
     environment: str
     scraperapi_key: str
+    # Supabase auth (replaces the old PWA_SHARED_SECRET model) -- hard-
+    # required like database_url, not optional-with-default, since the app
+    # cannot authenticate anyone without them. See app/auth.py.
+    supabase_url: str
+    supabase_service_key: str
+    # Comma-separated allowlist of the handful of real users -- mirrors
+    # sentimentfx-backend's ADMIN_EMAILS pattern. Empty (not unset) is a
+    # valid, deliberate "deny everyone" state rather than a crash, so a
+    # misconfigured deploy fails closed instead of taking down /health too
+    # -- see auth.py's _allowlisted_emails().
+    allowed_user_emails: str
     # SP-API (Phase 2, dormant) -- all default "" like scraperapi_key; see
     # app/spapi_client.py's is_configured(). No Pro-seller account exists
     # yet (see app/pricing/fees.py's module docstring), so these are unset
@@ -42,9 +52,11 @@ def get_settings() -> Settings:
         database_url=os.environ["DATABASE_URL"],
         keepa_api_key=os.environ.get("KEEPA_API_KEY", ""),
         discord_webhook_url=os.environ.get("DISCORD_WEBHOOK_URL", ""),
-        pwa_shared_secret=os.environ.get("PWA_SHARED_SECRET", ""),
         environment=os.environ.get("ENVIRONMENT", "development"),
         scraperapi_key=os.environ.get("SCRAPERAPI_KEY", ""),
+        supabase_url=os.environ["SUPABASE_URL"],
+        supabase_service_key=os.environ["SUPABASE_SERVICE_KEY"],
+        allowed_user_emails=os.environ.get("ALLOWED_USER_EMAILS", ""),
         spapi_client_id=os.environ.get("SPAPI_CLIENT_ID", ""),
         spapi_client_secret=os.environ.get("SPAPI_CLIENT_SECRET", ""),
         spapi_refresh_token=os.environ.get("SPAPI_REFRESH_TOKEN", ""),

@@ -1,14 +1,14 @@
 """Boot smoke test — proves `app.main:app` imports and starts without
 error, and /health responds with the right shape. Uses the sqlite test DB
-from conftest.py, so it needs no real Postgres/Keepa/Discord."""
+from conftest.py, so it needs no real Postgres/Keepa/Discord/Supabase."""
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app.main import app
+from tests.conftest import AUTH_HEADERS, fake_jwt
 
 client = TestClient(app)
-_AUTH_HEADERS = {"X-Shared-Secret": "test-shared-secret"}
 
 
 def test_root_responds():
@@ -40,53 +40,29 @@ def test_status_summary_respects_hours_query_param():
     assert resp.json()["hours"] == 6
 
 
-def test_deals_dashboard_shows_login_form_when_unauthenticated():
-    resp = client.get("/deals")
-    assert resp.status_code == 200
-    assert "text/html" in resp.headers["content-type"]
-    assert "login-form" in resp.text
+def test_deals_dashboard_redirects_to_pwa():
+    resp = client.get("/deals", follow_redirects=False)
+    assert resp.status_code in (302, 307)
+    assert resp.headers["location"] == "https://pwa.example.com"
 
 
-def test_deals_dashboard_rejects_stale_cookie():
-    resp = client.get("/deals", cookies={"deals_secret": "wrong-secret"})
-    assert resp.status_code == 200
-    assert "login-form" in resp.text
-
-
-def test_deals_login_sets_cookie_and_unlocks_dashboard():
-    login_resp = client.post("/deals/login", json={"secret": "test-shared-secret"})
-    assert login_resp.status_code == 200
-    assert login_resp.cookies.get("deals_secret") == "test-shared-secret"
-
-    dashboard_resp = client.get("/deals", cookies={"deals_secret": "test-shared-secret"})
-    assert dashboard_resp.status_code == 200
-    assert "login-form" not in dashboard_resp.text
-    assert "No confirmed deals yet" in dashboard_resp.text or "<table" in dashboard_resp.text
-
-
-def test_deals_login_rejects_wrong_secret():
-    resp = client.post("/deals/login", json={"secret": "nope"})
-    assert resp.status_code == 401
-    assert "deals_secret" not in resp.cookies
-
-
-def test_deals_json_requires_shared_secret():
+def test_deals_json_requires_auth():
     resp = client.get("/deals.json")
     assert resp.status_code == 401
 
 
-def test_deals_json_responds_with_secret_header():
-    resp = client.get("/deals.json", headers=_AUTH_HEADERS)
+def test_deals_json_responds_with_valid_token():
+    resp = client.get("/deals.json", headers=AUTH_HEADERS)
     assert resp.status_code == 200
     assert resp.json() == []
 
 
-def test_crawl_requires_shared_secret():
+def test_crawl_requires_auth():
     resp = client.post("/crawl")
     assert resp.status_code == 401
 
 
-def test_crawl_status_requires_shared_secret():
+def test_crawl_status_requires_auth():
     resp = client.get("/crawl/status")
     assert resp.status_code == 401
 
@@ -96,7 +72,7 @@ def test_crawl_triggers_and_status_reflects_it(monkeypatch):
     monkeypatch.setattr(crawl_runner, "start_crawl", lambda: (True, {
         "running": True, "started_at": "2026-07-29T00:00:00Z", "finished_at": None, "sources": [],
     }))
-    resp = client.post("/crawl", headers=_AUTH_HEADERS)
+    resp = client.post("/crawl", headers=AUTH_HEADERS)
     assert resp.status_code == 200
     assert resp.json()["started"] is True
     assert resp.json()["running"] is True
@@ -104,31 +80,31 @@ def test_crawl_triggers_and_status_reflects_it(monkeypatch):
     monkeypatch.setattr(crawl_runner, "get_status", lambda: {
         "running": False, "started_at": "2026-07-29T00:00:00Z", "finished_at": "2026-07-29T00:05:00Z", "sources": [],
     })
-    resp2 = client.get("/crawl/status", headers=_AUTH_HEADERS)
+    resp2 = client.get("/crawl/status", headers=AUTH_HEADERS)
     assert resp2.status_code == 200
     assert resp2.json()["running"] is False
 
 
-def test_crawl_ws_rejects_wrong_secret():
+def test_crawl_ws_rejects_invalid_token():
     with client.websocket_connect("/crawl/ws") as ws:
-        ws.send_text("wrong-secret")
+        ws.send_text("not-a-real-token")
         with pytest.raises(WebSocketDisconnect):
             ws.receive_json()
 
 
-def test_crawl_ws_sends_current_status_after_correct_secret(monkeypatch):
+def test_crawl_ws_sends_current_status_after_valid_token(monkeypatch):
     from app import crawl_runner
     fake_status = {"running": False, "started_at": None, "finished_at": None, "sources": []}
     monkeypatch.setattr(crawl_runner, "get_status", lambda: fake_status)
 
     with client.websocket_connect("/crawl/ws") as ws:
-        ws.send_text("test-shared-secret")
+        ws.send_text(fake_jwt("aal2"))
         data = ws.receive_json()
     assert data == fake_status
 
 
 def test_crawl_ws_rejects_when_no_message_sent_in_time(monkeypatch):
-    # A client that connects but never sends the secret must not hang the
+    # A client that connects but never sends a token must not hang the
     # server (or start streaming status) forever -- shrink the real 10s
     # timeout so the test doesn't have to wait for it.
     import app.main as main_module
@@ -153,16 +129,16 @@ def _seed_scored_product(db_session, asin: str) -> None:
     db_session.commit()
 
 
-def test_create_purchase_requires_shared_secret(db_session):
+def test_create_purchase_requires_auth(db_session):
     _seed_scored_product(db_session, "B000SMOKE1")
     resp = client.post("/purchases", json={"asin": "B000SMOKE1", "qty": 1, "actual_buy_price": 1000})
     assert resp.status_code == 401
 
 
-def test_create_purchase_succeeds_with_secret(db_session):
+def test_create_purchase_succeeds_with_auth(db_session):
     _seed_scored_product(db_session, "B000SMOKE2")
     resp = client.post(
-        "/purchases", json={"asin": "B000SMOKE2", "qty": 1, "actual_buy_price": 1000}, headers=_AUTH_HEADERS,
+        "/purchases", json={"asin": "B000SMOKE2", "qty": 1, "actual_buy_price": 1000}, headers=AUTH_HEADERS,
     )
     assert resp.status_code == 200
     assert resp.json()["qty"] == 1
@@ -170,33 +146,33 @@ def test_create_purchase_succeeds_with_secret(db_session):
 
 def test_create_purchase_404_when_no_score(db_session):
     resp = client.post(
-        "/purchases", json={"asin": "B000UNKNOWN", "qty": 1, "actual_buy_price": 1000}, headers=_AUTH_HEADERS,
+        "/purchases", json={"asin": "B000UNKNOWN", "qty": 1, "actual_buy_price": 1000}, headers=AUTH_HEADERS,
     )
     assert resp.status_code == 404
 
 
-def test_create_outcome_succeeds_with_secret(db_session):
+def test_create_outcome_succeeds_with_auth(db_session):
     _seed_scored_product(db_session, "B000SMOKE3")
     purchase_resp = client.post(
-        "/purchases", json={"asin": "B000SMOKE3", "qty": 1, "actual_buy_price": 1000}, headers=_AUTH_HEADERS,
+        "/purchases", json={"asin": "B000SMOKE3", "qty": 1, "actual_buy_price": 1000}, headers=AUTH_HEADERS,
     )
     purchase_id = purchase_resp.json()["id"]
 
     resp = client.post(
         "/outcomes",
         json={"purchase_id": purchase_id, "sold_price": 2000, "sold_date": "2026-07-24T00:00:00Z", "actual_fees": 300},
-        headers=_AUTH_HEADERS,
+        headers=AUTH_HEADERS,
     )
     assert resp.status_code == 200
     assert resp.json()["sold_price"] == 2000
 
 
-def test_scan_requires_shared_secret():
+def test_scan_requires_auth():
     resp = client.post("/scan", json={"ean": "5901234123457", "buy_price": 1000})
     assert resp.status_code == 401
 
 
-def test_scan_succeeds_with_secret(monkeypatch):
+def test_scan_succeeds_with_auth(monkeypatch):
     from app import keepa_client
 
     monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean: {
@@ -218,7 +194,7 @@ def test_scan_succeeds_with_secret(monkeypatch):
     })
     monkeypatch.setattr("app.discord_notifier.send_ping", lambda url, embed: True)
 
-    resp = client.post("/scan", json={"ean": "5901234123457", "buy_price": 1000}, headers=_AUTH_HEADERS)
+    resp = client.post("/scan", json={"ean": "5901234123457", "buy_price": 1000}, headers=AUTH_HEADERS)
 
     assert resp.status_code == 200
     body = resp.json()
@@ -232,7 +208,7 @@ def test_scan_cors_preflight_allows_configured_origin():
         headers={
             "Origin": "https://pwa.example.com",
             "Access-Control-Request-Method": "POST",
-            "Access-Control-Request-Headers": "X-Shared-Secret",
+            "Access-Control-Request-Headers": "Authorization",
         },
     )
     assert resp.status_code == 200

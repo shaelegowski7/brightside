@@ -15,7 +15,9 @@ def _settings(configured: bool) -> Settings:
     suffix = "" if not configured else "x"
     return Settings(
         database_url="sqlite:///:memory:", keepa_api_key="k", discord_webhook_url="https://x",
-        pwa_shared_secret="s", environment="test", scraperapi_key="", pwa_origin="",
+        environment="test", scraperapi_key="", pwa_origin="",
+        supabase_url="https://test.supabase.co", supabase_service_key="test-service-key",
+        allowed_user_emails="test@example.com",
         spapi_client_id=f"client-id{suffix}" if configured else "",
         spapi_client_secret=f"client-secret{suffix}" if configured else "",
         spapi_refresh_token=f"refresh-token{suffix}" if configured else "",

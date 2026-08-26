@@ -1,8 +1,7 @@
-"""GET /deals's query + render logic: only the latest Score per deal counts
-(a deal can be re-scored across price changes), only genuinely good verdicts
-(PASS/PASS_WITH_FLAGS) show up, and every dynamic value is HTML-escaped
-before being written into the page since deal/product titles are untrusted
-retailer-sourced text."""
+"""get_confirmed_deals's query logic, backing GET /deals.json: only the
+latest Score per deal counts (a deal can be re-scored across price
+changes), and only genuinely good verdicts (PASS/PASS_WITH_FLAGS) show
+up."""
 from app import dashboard, models
 
 
@@ -98,33 +97,3 @@ def test_get_confirmed_deals_falls_back_to_deal_title_when_no_product(db_session
     rows = dashboard.get_confirmed_deals(db_session)
     assert rows[0].title == "Raw deal title"
     assert rows[0].asin is None
-
-
-def test_render_page_escapes_html_in_title():
-    row = dashboard.DealRow(
-        title="<script>alert(1)</script>", retailer="Evil Retailer", retailer_url="https://x/evil",
-        asin="B000EVIL01", match_confidence="high", buy_price_pence=1000, sell_price_pence=1500,
-        net_profit_pence=500, roi=0.5, est_monthly_sales=10, verdict="PASS", flags=[], ts=None,
-    )
-    html = dashboard.render_page([row])
-    assert "<script>alert(1)</script>" not in html
-    assert "&lt;script&gt;" in html
-
-
-def test_render_page_empty_state():
-    html = dashboard.render_page([])
-    assert "No confirmed deals yet" in html
-
-
-def test_render_page_includes_formatted_price_and_roi():
-    row = dashboard.DealRow(
-        title="Widget", retailer="Argos", retailer_url="https://x/1", asin="B000FMT001",
-        match_confidence="high", buy_price_pence=1234, sell_price_pence=None,
-        net_profit_pence=None, roi=0.357, est_monthly_sales=None, verdict="PASS_WITH_FLAGS",
-        flags=["low_rank_history"], ts=None,
-    )
-    html = dashboard.render_page([row])
-    assert "£12.34" in html
-    assert "36%" in html
-    assert "low_rank_history" in html
-    assert "PASS WITH FLAGS" in html
