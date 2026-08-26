@@ -23,9 +23,10 @@ export function MfaEnroll() {
       }
       setEnrollData({
         factorId: data.id,
-        // Supabase returns the QR code as raw SVG markup, not a data URL --
-        // needs the prefix to use directly as an <img src>.
-        qrCodeSvg: `data:image/svg+xml;utf-8,${encodeURIComponent(data.totp.qr_code)}`,
+        // The installed @supabase/auth-js already returns qr_code as a full
+        // `data:image/svg+xml;utf-8,...` URI (see GoTrueClient.ts mfa.enroll) --
+        // wrapping it again here double-encodes it into a broken image.
+        qrCodeSvg: data.totp.qr_code,
         manualSecret: data.totp.secret,
       });
     });
