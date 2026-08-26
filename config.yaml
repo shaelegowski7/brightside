@@ -104,6 +104,7 @@ hukd:
     - "Loaded"
     - "AliExpress"
     - "Joybuy"
+    - "Amazon"
 
 decision:
   inbound_shipping_pence: 40   # spec default £0.40/unit
