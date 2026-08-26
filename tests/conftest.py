@@ -14,9 +14,22 @@ os.environ.setdefault("PWA_ORIGIN", "https://pwa.example.com")
 import pytest  # noqa: E402
 
 from app.database import Base, SessionLocal, engine  # noqa: E402
-from app import models  # noqa: E402,F401
+from app import auth_monitor, models  # noqa: E402,F401
 
 Base.metadata.create_all(bind=engine)
+
+
+@pytest.fixture(autouse=True)
+def _reset_auth_monitor():
+    """auth_monitor's failed-attempt tracker is module-level global state
+    (see its own docstring) -- several smoke tests deliberately trigger a
+    401 via the shared-secret paths it watches. Without resetting between
+    tests, those failures would accumulate across the whole suite and
+    eventually cross the alert threshold, firing a real network call to
+    DISCORD_WEBHOOK_URL's fake test value above."""
+    auth_monitor._reset_for_tests()
+    yield
+    auth_monitor._reset_for_tests()
 
 
 @pytest.fixture

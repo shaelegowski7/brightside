@@ -9,10 +9,14 @@ import hmac
 
 from fastapi import Header, HTTPException
 
+from . import auth_monitor
 from .config import get_settings
 
 
 def require_shared_secret(x_shared_secret: str | None = Header(default=None)) -> None:
     expected = get_settings().pwa_shared_secret
-    if not expected or not x_shared_secret or not hmac.compare_digest(x_shared_secret, expected):
+    if not expected:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    if not x_shared_secret or not hmac.compare_digest(x_shared_secret, expected):
+        auth_monitor.record_failed_attempt("shared_secret_header")
         raise HTTPException(status_code=401, detail="unauthorized")

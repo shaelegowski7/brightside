@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from . import auth, crawl_runner, dashboard, monitoring, purchases, scan, schemas
+from . import auth, auth_monitor, crawl_runner, dashboard, monitoring, purchases, scan, schemas
 from .config import get_config, get_settings
 from .database import engine, get_db
 from .decision.engine import DecisionConfig
@@ -58,7 +58,10 @@ def deals_dashboard(db: Session = Depends(get_db), deals_secret: str | None = Co
 @app.post("/deals/login")
 def deals_login(body: schemas.DealsLogin):
     expected = get_settings().pwa_shared_secret
-    if not expected or not body.secret or not hmac.compare_digest(body.secret, expected):
+    if not expected:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    if not body.secret or not hmac.compare_digest(body.secret, expected):
+        auth_monitor.record_failed_attempt("deals_login")
         raise HTTPException(status_code=401, detail="unauthorized")
     resp = JSONResponse({"ok": True})
     # Cookie holds the secret itself -- no session store, matching this
@@ -191,7 +194,11 @@ async def crawl_ws(websocket: WebSocket):
         return
 
     expected = get_settings().pwa_shared_secret
-    if not expected or not secret or not hmac.compare_digest(secret, expected):
+    if not expected:
+        await websocket.close(code=4001, reason="unauthorized")
+        return
+    if not secret or not hmac.compare_digest(secret, expected):
+        auth_monitor.record_failed_attempt("crawl_ws")
         await websocket.close(code=4001, reason="unauthorized")
         return
 
