@@ -9,6 +9,7 @@ import { ConfirmedDeals } from "./components/ConfirmedDeals";
 import { LoginForm } from "./components/Auth/LoginForm";
 import { MfaEnroll } from "./components/Auth/MfaEnroll";
 import { MfaChallenge } from "./components/Auth/MfaChallenge";
+import { ChangePassword } from "./components/Auth/ChangePassword";
 import type { ApiError, ScanResponse } from "./types";
 
 type Stage =
@@ -54,6 +55,7 @@ export function App() {
   const [gate, setGate] = useState<GateState>({ name: "checking" });
   const [stage, setStage] = useState<Stage>({ name: "scanning" });
   const [view, setView] = useState<View>("scan");
+  const [changingPassword, setChangingPassword] = useState(false);
 
   useEffect(() => {
     resolveGateState().then(setGate);
@@ -122,12 +124,19 @@ export function App() {
             Green Deals
           </button>
         </nav>
-        <button type="button" className="btn-secondary" onClick={() => supabase.auth.signOut()}>
-          Sign out
-        </button>
+        <div className="header-actions">
+          <button type="button" className="btn-secondary" onClick={() => setChangingPassword(true)}>
+            Change password
+          </button>
+          <button type="button" className="btn-secondary" onClick={() => supabase.auth.signOut()}>
+            Sign out
+          </button>
+        </div>
       </header>
       <main className="app-main">
-        {view === "deals" ? (
+        {changingPassword ? (
+          <ChangePassword onDone={() => setChangingPassword(false)} />
+        ) : view === "deals" ? (
           <ConfirmedDeals onAuthLost={onAuthLost} />
         ) : (
           <ScanFlow stage={stage} setStage={setStage} onAuthLost={onAuthLost} />

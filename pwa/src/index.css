@@ -65,10 +65,17 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
+  row-gap: 8px;
   padding: 14px 16px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .app-header h1 {
