@@ -32,19 +32,38 @@ type View = "scan" | "deals";
 // ScanFlow already surfaces the ApiError's message inline, which is
 // enough for the rare case this actually fires (the allowlist changing
 // under a live session).
+//
+// needs_password_reset sits after MFA, before ready -- Amazon's SP-API
+// questionnaire requires 365-day password rotation, which Supabase has no
+// built-in support for (see app/auth.py, which enforces the same rule
+// server-side as the real backstop; this is just the UX that keeps a
+// client from ever needing to hit that backstop in normal use).
 type GateState =
   | { name: "checking" }
   | { name: "signed_out" }
   | { name: "needs_mfa_enrollment" }
   | { name: "needs_mfa_challenge"; factor: Factor }
+  | { name: "needs_password_reset" }
   | { name: "ready" };
+
+const PASSWORD_MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000;
+
+// password_changed_at is set by ChangePassword.tsx on every change; an
+// account that has never changed it falls back to created_at, same as the
+// backend (see app/auth.py's _verify_token).
+function isPasswordExpired(user: { created_at: string; user_metadata: Record<string, unknown> }): boolean {
+  const raw = (user.user_metadata.password_changed_at as string | undefined) ?? user.created_at;
+  return Date.now() - new Date(raw).getTime() > PASSWORD_MAX_AGE_MS;
+}
 
 async function resolveGateState(): Promise<GateState> {
   const { data: sessionData } = await supabase.auth.getSession();
   if (!sessionData.session) return { name: "signed_out" };
 
   const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-  if (aalData?.currentLevel === "aal2") return { name: "ready" };
+  if (aalData?.currentLevel === "aal2") {
+    return isPasswordExpired(sessionData.session.user) ? { name: "needs_password_reset" } : { name: "ready" };
+  }
 
   const { data: factorsData } = await supabase.auth.mfa.listFactors();
   const verifiedTotp = factorsData?.totp.find((f) => f.status === "verified");
@@ -100,6 +119,17 @@ export function App() {
     return (
       <main className="app-main">
         <MfaChallenge factor={gate.factor} />
+      </main>
+    );
+  }
+
+  if (gate.name === "needs_password_reset") {
+    return (
+      <main className="app-main">
+        {/* onDone is a no-op here on purpose -- the onAuthStateChange
+            listener above picks up the metadata update from updateUser()
+            and re-resolves the gate to `ready` on its own. */}
+        <ChangePassword forced onDone={() => {}} />
       </main>
     );
   }

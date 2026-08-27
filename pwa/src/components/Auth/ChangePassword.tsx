@@ -11,7 +11,7 @@ function friendlyError(message: string): string {
   return message;
 }
 
-export function ChangePassword({ onDone }: { onDone: () => void }) {
+export function ChangePassword({ onDone, forced = false }: { onDone: () => void; forced?: boolean }) {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -26,7 +26,13 @@ export function ChangePassword({ onDone }: { onDone: () => void }) {
     }
     setSubmitting(true);
     setError(null);
-    const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
+    // password_changed_at drives both the PWA's own gate (App.tsx) and the
+    // backend's per-request check (app/auth.py) -- Supabase merges `data`
+    // into the existing user_metadata rather than replacing it.
+    const { error: updateError } = await supabase.auth.updateUser({
+      password: newPassword,
+      data: { password_changed_at: new Date().toISOString() },
+    });
     setSubmitting(false);
     if (updateError) {
       setError(friendlyError(updateError.message));
@@ -39,10 +45,19 @@ export function ChangePassword({ onDone }: { onDone: () => void }) {
     return (
       <div className="card">
         <h2>Password changed</h2>
-        <p className="muted">Your password has been updated.</p>
-        <button type="button" className="btn-secondary" onClick={onDone}>
-          Done
-        </button>
+        {forced ? (
+          // App.tsx's onAuthStateChange listener picks up the metadata
+          // update on its own and swaps this out for the app shell --
+          // nothing for the user to click here, unlike the voluntary path.
+          <p className="muted">One moment…</p>
+        ) : (
+          <>
+            <p className="muted">Your password has been updated.</p>
+            <button type="button" className="btn-secondary" onClick={onDone}>
+              Done
+            </button>
+          </>
+        )}
       </div>
     );
   }
@@ -50,6 +65,11 @@ export function ChangePassword({ onDone }: { onDone: () => void }) {
   return (
     <div className="card">
       <h2>Change password</h2>
+      {forced && (
+        <p className="muted">
+          Your password is over a year old -- Brightside requires a change every 365 days. Set a new one to continue.
+        </p>
+      )}
       {error && <p role="alert">{error}</p>}
       <form onSubmit={handleSubmit}>
         <label htmlFor="new-password">New password</label>
@@ -79,9 +99,11 @@ export function ChangePassword({ onDone }: { onDone: () => void }) {
           {submitting ? "Updating…" : "Update password"}
         </button>
       </form>
-      <button type="button" className="btn-secondary" style={{ marginTop: 12 }} onClick={onDone}>
-        Cancel
-      </button>
+      {!forced && (
+        <button type="button" className="btn-secondary" style={{ marginTop: 12 }} onClick={onDone}>
+          Cancel
+        </button>
+      )}
     </div>
   );
 }

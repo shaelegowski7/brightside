@@ -21,10 +21,18 @@ MFA" is unavoidably two steps: verify the token is real (network), then
 decode its own payload to read `aal` (no network). We reimplement the
 decode locally rather than reach into supabase_auth's private helpers,
 since those aren't public API and could shift under us on a version bump.
+
+Password rotation: Amazon's SP-API security questionnaire requires a
+365-day password expiry. Supabase has no built-in concept of this, so it's
+tracked as a plain timestamp in user_metadata (see _verify_token) and
+enforced the same two-layer way as MFA above -- the PWA's gate forces a
+change before the app shell renders, and this module re-checks it per
+request as the real backstop.
 """
 import base64
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Header, HTTPException
 from supabase import create_client
@@ -32,11 +40,20 @@ from supabase import create_client
 from . import auth_monitor
 from .config import get_settings
 
+# Amazon SP-API's security questionnaire requires annual password rotation.
+# Supabase has no built-in expiry, so this is enforced here.
+_PASSWORD_MAX_AGE = timedelta(days=365)
+
 
 @dataclass
 class AuthedUser:
     id: str
     email: str
+    # Both default to "now" so every existing test/call site that builds an
+    # AuthedUser without these (there are many, pre-dating this check) reads
+    # as a freshly-changed password rather than an expired one.
+    password_changed_at: datetime | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class AuthError(Exception):
@@ -56,9 +73,20 @@ def _get_supabase_client():
 
 def _verify_token(token: str) -> AuthedUser:
     """The one function in this module that touches the network -- tests
-    monkeypatch this directly rather than mocking the Supabase client."""
+    monkeypatch this directly rather than mocking the Supabase client.
+    password_changed_at is set by pwa/src/components/Auth/ChangePassword.tsx
+    on every successful change, stored in Supabase's own user_metadata (no
+    local users table exists -- see config.py's Settings, auth is fully
+    delegated to Supabase). It's absent for an account that has never gone
+    through that flow yet; created_at is always present as the fallback."""
     user = _get_supabase_client().auth.get_user(token).user
-    return AuthedUser(id=user.id, email=user.email)
+    raw_changed_at = (user.user_metadata or {}).get("password_changed_at")
+    return AuthedUser(
+        id=user.id,
+        email=user.email,
+        password_changed_at=datetime.fromisoformat(raw_changed_at.replace("Z", "+00:00")) if raw_changed_at else None,
+        created_at=user.created_at,
+    )
 
 
 def _extract_aal(token: str) -> str | None:
@@ -84,10 +112,10 @@ def _allowlisted_emails() -> set[str]:
 
 def authenticate(token: str | None) -> AuthedUser:
     """Core check, in order: token presented -> token genuine -> email
-    allowlisted -> session is MFA-elevated (aal2). Records a failed-attempt
-    signal (see auth_monitor.py) on every rejection except a missing
-    token -- presenting no credential at all isn't the same signal as
-    presenting one that gets rejected."""
+    allowlisted -> session is MFA-elevated (aal2) -> password not expired.
+    Records a failed-attempt signal (see auth_monitor.py) on every rejection
+    except a missing token -- presenting no credential at all isn't the same
+    signal as presenting one that gets rejected."""
     if not token:
         raise AuthError("missing_token")
 
@@ -105,6 +133,11 @@ def authenticate(token: str | None) -> AuthedUser:
         auth_monitor.record_failed_attempt("insufficient_aal")
         raise AuthError("mfa_required")
 
+    baseline = user.password_changed_at or user.created_at
+    if datetime.now(timezone.utc) - baseline > _PASSWORD_MAX_AGE:
+        auth_monitor.record_failed_attempt("password_expired")
+        raise AuthError("password_expired")
+
     return user
 
 
@@ -112,6 +145,13 @@ _HTTP_STATUS_BY_REASON = {
     "missing_token": 401,
     "invalid_token": 401,
     "mfa_required": 401,
+    # The PWA's own gate already forces a password change before the app
+    # shell ever renders (see App.tsx's needs_password_reset state), so this
+    # only fires for a client bypassing the PWA entirely -- same backstop
+    # role as mfa_required. A 401 is correct here (unlike not_authorized
+    # below): signing out and re-authenticating doesn't loop, since the
+    # PWA's gate re-evaluates fresh on the next login and catches it again.
+    "password_expired": 401,
     # Distinct from the rest -- a 401 makes the PWA clear its session and
     # re-show the login form (see pwa/src/api.ts), which would just
     # succeed again and loop for a valid-but-unauthorized account. 403
