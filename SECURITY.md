@@ -5,10 +5,10 @@ the team detects, responds to, and reports security incidents.
 
 ## Roles
 
-- **Primary responder**: [name] — owns the Railway, Vercel, GitHub,
+- **Primary responder**: Shae Legowski — owns the Railway, Vercel, GitHub,
   Supabase, and Amazon Seller Central accounts. First point of contact
   for any suspected incident.
-- **Backup responder**: [name] — can rotate credentials and access
+- **Backup responder**: Jac McLaughlin — can rotate credentials and access
   infrastructure if the primary responder is unavailable.
 - Any team member who notices anything suspicious (an unexpected
   failed-login alert, unfamiliar activity, data that looks wrong) reports
@@ -48,8 +48,8 @@ the team detects, responds to, and reports security incidents.
 
 Reviewed every 6 months.
 
-- Last review: [date]
-- Next review: [date + 6 months]
+- Last review: 2026-08-28
+- Next review: 2027-02-28
 
 ## Incident log
 
