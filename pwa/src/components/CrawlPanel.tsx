@@ -7,11 +7,33 @@ interface CrawlPanelProps {
   onFinished: () => void;
 }
 
+// Mirrors app/crawl_runner.py's _SOURCES -- the WebSocket only reports the
+// sources of whatever run is currently in progress, so there's nothing to
+// build this checklist from until after a crawl has already started at
+// least once on this server process. Keep in sync if a source is added.
+const ALL_SOURCE_KEYS = [
+  "hukd", "argos", "smyths", "bq", "screwfix", "homebargains", "johnlewis", "pokemon_center", "nda_toys",
+] as const;
+const SOURCE_LABELS: Record<string, string> = {
+  hukd: "HotUKDeals", argos: "Argos", smyths: "Smyths Toys", bq: "B&Q", screwfix: "Screwfix",
+  homebargains: "Home Bargains", johnlewis: "John Lewis", pokemon_center: "Pokemon Center", nda_toys: "NDA Toys",
+};
+
 export function CrawlPanel({ onAuthLost, onFinished }: CrawlPanelProps) {
   const [status, setStatus] = useState<CrawlStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set(ALL_SOURCE_KEYS));
   const wasRunning = useRef(false);
+
+  function toggleSource(key: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   function handleApiError(err: unknown): void {
     const apiErr = err as ApiError;
@@ -44,7 +66,11 @@ export function CrawlPanel({ onAuthLost, onFinished }: CrawlPanelProps) {
     setStarting(true);
     setError(null);
     try {
-      const result = await triggerCrawl();
+      // Sending every key has the same effect as omitting sources entirely
+      // (the backend just includes everything either way) -- always
+      // sending the current selection keeps this one code path regardless
+      // of whether anything's actually deselected.
+      const result = await triggerCrawl(Array.from(selected));
       setStatus(result);
     } catch (err) {
       handleApiError(err);
@@ -70,7 +96,12 @@ export function CrawlPanel({ onAuthLost, onFinished }: CrawlPanelProps) {
               : "Pull fresh listings from every retailer right now"}
           </p>
         </div>
-        <button type="button" className="btn-primary crawl-run-btn" onClick={handleRunClick} disabled={running || starting}>
+        <button
+          type="button"
+          className="btn-primary crawl-run-btn"
+          onClick={handleRunClick}
+          disabled={running || starting || selected.size === 0}
+        >
           {running || starting ? (
             <>
               <span className="crawl-icon running" aria-hidden="true" />
@@ -81,6 +112,21 @@ export function CrawlPanel({ onAuthLost, onFinished }: CrawlPanelProps) {
           )}
         </button>
       </div>
+
+      {!running && (
+        <div className="crawl-source-select">
+          {ALL_SOURCE_KEYS.map((key) => (
+            <label key={key} className="crawl-source-checkbox">
+              <input
+                type="checkbox"
+                checked={selected.has(key)}
+                onChange={() => toggleSource(key)}
+              />
+              {SOURCE_LABELS[key]}
+            </label>
+          ))}
+        </div>
+      )}
 
       {error && <p role="alert" style={{ marginTop: 12 }}>{error}</p>}
 

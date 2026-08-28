@@ -65,6 +65,28 @@ def test_start_crawl_captures_error_without_stopping_other_sources(monkeypatch):
     assert "argos exploded" in by_key["argos"]["error"]
 
 
+def test_start_crawl_with_sources_only_runs_the_selected_ones(monkeypatch):
+    """sources= restricts a run to just those keys -- e.g. resuming NDA
+    Toys alone without re-running every fast source ahead of it in
+    _SOURCES. Unselected sources shouldn't appear in the run at all,
+    not even as "skipped" (that status means config-disabled)."""
+    monkeypatch.setattr(crawl_runner, "get_config", lambda: {
+        **_ALL_DISABLED, "argos": {"enabled": True}, "bq": {"enabled": True},
+    })
+    calls = []
+    monkeypatch.setattr(scheduler, "poll_hukd_feeds", lambda: calls.append("hukd") or 1)
+    monkeypatch.setattr(scheduler, "poll_argos_clearance", lambda: calls.append("argos") or 2)
+    monkeypatch.setattr(scheduler, "poll_bq_clearance", lambda: calls.append("bq") or 3)
+
+    started, _ = crawl_runner.start_crawl(sources=["argos"])
+    assert started is True
+    _wait_until_done()
+
+    assert calls == ["argos"]
+    final = crawl_runner.get_status()
+    assert [s["key"] for s in final["sources"]] == ["argos"]
+
+
 def test_start_crawl_refuses_second_run_while_in_progress(monkeypatch):
     monkeypatch.setattr(crawl_runner, "get_config", lambda: _ALL_DISABLED)
     release = threading.Event()

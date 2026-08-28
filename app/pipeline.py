@@ -255,8 +255,13 @@ def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_pr
     if sent:
         discord_notifier.record_ping(db, product.asin, deal.id, score.id)
         deal.status = "pinged"
+        print(
+            f"[PIPELINE] {product.asin}: PASS ({score.verdict}) -- "
+            f"roi={result.roi:.1%} net_profit={result.net_profit_pence}p pinged to Discord"
+        )
     else:
         deal.status = "ping_failed"
+        print(f"[PIPELINE] {product.asin}: PASS ({score.verdict}) but Discord post failed")
     db.commit()
 
 

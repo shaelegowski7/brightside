@@ -125,8 +125,13 @@ def create_scan(
 
 
 @app.post("/crawl")
-def trigger_crawl(_: auth.AuthedUser = Depends(auth.require_user)):
-    started, status = crawl_runner.start_crawl()
+def trigger_crawl(
+    body: schemas.CrawlTriggerRequest | None = None, _: auth.AuthedUser = Depends(auth.require_user)
+):
+    # body itself is None for a bodyless POST (the PWA's default "run
+    # everything" button) -- treated the same as body.sources being None.
+    sources = body.sources if body else None
+    started, status = crawl_runner.start_crawl(sources)
     return {"started": started, **status}
 
 

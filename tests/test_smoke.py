@@ -69,7 +69,7 @@ def test_crawl_status_requires_auth():
 
 def test_crawl_triggers_and_status_reflects_it(monkeypatch):
     from app import crawl_runner
-    monkeypatch.setattr(crawl_runner, "start_crawl", lambda: (True, {
+    monkeypatch.setattr(crawl_runner, "start_crawl", lambda sources=None: (True, {
         "running": True, "started_at": "2026-07-29T00:00:00Z", "finished_at": None, "sources": [],
     }))
     resp = client.post("/crawl", headers=AUTH_HEADERS)
@@ -83,6 +83,28 @@ def test_crawl_triggers_and_status_reflects_it(monkeypatch):
     resp2 = client.get("/crawl/status", headers=AUTH_HEADERS)
     assert resp2.status_code == 200
     assert resp2.json()["running"] is False
+
+
+def test_crawl_trigger_passes_selected_sources_through(monkeypatch):
+    from app import crawl_runner
+    received = []
+
+    def fake_start_crawl(sources=None):
+        received.append(sources)
+        return True, {"running": True, "started_at": "2026-07-29T00:00:00Z", "finished_at": None, "sources": []}
+
+    monkeypatch.setattr(crawl_runner, "start_crawl", fake_start_crawl)
+
+    resp = client.post("/crawl", headers=AUTH_HEADERS, json={"sources": ["nda_toys"]})
+    assert resp.status_code == 200
+    assert received == [["nda_toys"]]
+
+    # A bodyless POST (the PWA's default "run everything" button) must
+    # still work exactly as before -- sources=None, not an error.
+    received.clear()
+    resp2 = client.post("/crawl", headers=AUTH_HEADERS)
+    assert resp2.status_code == 200
+    assert received == [None]
 
 
 def test_crawl_ws_rejects_invalid_token():

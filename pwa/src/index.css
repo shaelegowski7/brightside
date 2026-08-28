@@ -375,6 +375,28 @@ a {
   margin-bottom: 16px;
 }
 
+.crawl-source-select {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.crawl-source-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.crawl-source-checkbox input {
+  cursor: pointer;
+}
+
 .crawl-header {
   display: flex;
   align-items: center;

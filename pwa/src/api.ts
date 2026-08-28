@@ -67,7 +67,7 @@ export async function getConfirmedDeals(): Promise<ConfirmedDeal[]> {
 async function _crawlFetch(path: string, init?: RequestInit): Promise<CrawlStatus & { started?: boolean }> {
   let resp: Response;
   try {
-    resp = await fetch(`${API_BASE_URL}${path}`, { ...init, headers: await authHeader() });
+    resp = await fetch(`${API_BASE_URL}${path}`, { ...init, headers: { ...init?.headers, ...(await authHeader()) } });
   } catch {
     throw { status: 0, message: "Network error -- check your connection" } satisfies ApiError;
   }
@@ -78,8 +78,15 @@ async function _crawlFetch(path: string, init?: RequestInit): Promise<CrawlStatu
   return await resp.json();
 }
 
-export function triggerCrawl(): Promise<CrawlStatus & { started: boolean }> {
-  return _crawlFetch("/crawl", { method: "POST" }) as Promise<CrawlStatus & { started: boolean }>;
+// sources omitted/undefined runs every enabled source (unchanged default
+// behaviour); an explicit list restricts the run to just those keys (see
+// app/crawl_runner.py's start_crawl).
+export function triggerCrawl(sources?: string[]): Promise<CrawlStatus & { started: boolean }> {
+  return _crawlFetch("/crawl", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sources: sources ?? null }),
+  }) as Promise<CrawlStatus & { started: boolean }>;
 }
 
 // Live crawl status over a WebSocket instead of polling /crawl/status on a

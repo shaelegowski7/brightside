@@ -80,15 +80,21 @@ def get_status() -> dict:
         return _current.to_dict()
 
 
-def start_crawl() -> tuple[bool, dict]:
+def start_crawl(sources: list[str] | None = None) -> tuple[bool, dict]:
     """Returns (started, status). started=False means a run is already in
     progress -- the caller gets that run's current status back rather than
-    a second one being kicked off."""
+    a second one being kicked off. `sources`, if given, restricts this run
+    to just those source keys (see _SOURCES) instead of every enabled one --
+    e.g. to resume a single long-running source (NDA Toys) without first
+    re-walking every fast source ahead of it in the list. Unselected
+    sources aren't included in the run at all (not even as "skipped" --
+    that status is reserved for config-disabled sources)."""
     global _current
     with _state_lock:
         if _current.running:
             return False, _current.to_dict()
         app_cfg = get_config()
+        selected = set(sources) if sources is not None else None
         run = CrawlRun(
             running=True,
             started_at=datetime.now(timezone.utc),
@@ -97,6 +103,7 @@ def start_crawl() -> tuple[bool, dict]:
                 if cfg_key is None or app_cfg.get(cfg_key, {}).get("enabled", False)
                 else SourceRun(key=key, label=label, status="skipped")
                 for key, label, _fn_name, cfg_key in _SOURCES
+                if selected is None or key in selected
             ],
         )
         _current = run
@@ -106,7 +113,10 @@ def start_crawl() -> tuple[bool, dict]:
 
 
 def _run() -> None:
+    active_keys = {s.key for s in _current.sources}
     for key, _label, fn_name, _cfg_key in _SOURCES:
+        if key not in active_keys:
+            continue
         with _state_lock:
             source = next(s for s in _current.sources if s.key == key)
             if source.status == "skipped":

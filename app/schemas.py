@@ -25,6 +25,14 @@ class ScanRequest(BaseModel):
     buy_price: int   # pence
 
 
+class CrawlTriggerRequest(BaseModel):
+    # None (the default, and what an empty POST body sends) means "every
+    # enabled source", same as the pre-existing behaviour -- selecting a
+    # subset is opt-in, not required, so the PWA's plain "run crawl now"
+    # button keeps working unchanged. Keys match crawl_runner._SOURCES.
+    sources: list[str] | None = None
+
+
 class ScanResponse(BaseModel):
     verdict: str
     reasons: list[str] = []
