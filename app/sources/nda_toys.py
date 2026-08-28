@@ -33,7 +33,15 @@ VAT: the tile shows both an ex-VAT "Unit Price" and an inc-VAT figure
 inc-VAT figure deliberately -- what actually leaves the account at
 checkout, consistent with every other source here (Screwfix/Smyths/HUKD
 retail prices are already VAT-inclusive), and doesn't assume VAT is
-reclaimable."""
+reclaimable.
+
+Resume cursor: with 261 brand pages in category_urls (config.yaml), a
+manual-trigger-only crawl that gets interrupted (e.g. a deploy) needs to
+pick back up without re-walking every already-covered brand's listing
+pages from scratch -- crawl_state alone only protects individual products,
+not the listing-page fetches themselves. See models.NdaToysCrawlProgress:
+a single persisted index into category_urls, advanced only once a brand's
+listing is walked to a genuine last page, never on a fetch failure."""
 import re
 import time
 from dataclasses import dataclass
@@ -45,6 +53,7 @@ from sqlalchemy.orm import Session
 
 from . import crawl_state, scraperapi
 from .base import RawDeal
+from .. import models
 from ..matching import jsonld
 
 _BASE_URL = "https://www.nda-toys.com"
@@ -137,12 +146,37 @@ class NdaToysAdapter:
         self.max_delay_s = max_delay_s
 
     def crawl(self, db: Session, on_deal: Callable[[RawDeal], None]) -> int:
+        """Resumes from wherever nda_toys_crawl_progress left off -- see
+        models.NdaToysCrawlProgress's docstring. A brand's index only
+        advances once its listing is walked all the way to a genuine last
+        page (rel="next" absent), never on a fetch failure mid-walk, so an
+        incomplete brand always gets retried in full next time rather than
+        silently skipped."""
+        start_index = self._resume_index(db)
         count = 0
-        for start_url in self.category_urls:
-            count += self._crawl_listing(db, start_url, on_deal)
+        for i, start_url in enumerate(self.category_urls):
+            if i < start_index:
+                continue
+            brand_count, completed = self._crawl_listing(db, start_url, on_deal)
+            count += brand_count
+            if completed:
+                self._advance_progress(db, i)
         return count
 
-    def _crawl_listing(self, db: Session, start_url: str, on_deal: Callable[[RawDeal], None]) -> int:
+    def _resume_index(self, db: Session) -> int:
+        progress = db.get(models.NdaToysCrawlProgress, 1)
+        return (progress.completed_through_index + 1) if progress else 0
+
+    def _advance_progress(self, db: Session, index: int) -> None:
+        progress = db.get(models.NdaToysCrawlProgress, 1)
+        if progress is None:
+            progress = models.NdaToysCrawlProgress(id=1, completed_through_index=index)
+            db.add(progress)
+        else:
+            progress.completed_through_index = index
+        db.commit()
+
+    def _crawl_listing(self, db: Session, start_url: str, on_deal: Callable[[RawDeal], None]) -> tuple[int, bool]:
         count = 0
         url = start_url
         for _page_num in range(_MAX_PAGES):
@@ -150,7 +184,7 @@ class NdaToysAdapter:
             result = scraperapi.fetch(url, self.api_key, ultra_premium=True)
             if result is None or result[0] != 200:
                 print(f"[NDA_TOYS] {url}: listing fetch failed ({result[0] if result else 'error'}), stopping")
-                break
+                return count, False
 
             status, html = result
             for product in _parse_listing(html):
@@ -161,9 +195,9 @@ class NdaToysAdapter:
 
             next_url = _next_page_url(html)
             if next_url is None:
-                break
+                return count, True
             url = next_url
-        return count
+        return count, False   # hit _MAX_PAGES without a genuine last page -- treat as incomplete
 
     def _process_product(self, db: Session, product: _ListingProduct, on_deal: Callable[[RawDeal], None]) -> bool:
         diff = crawl_state.check(db, "nda_toys", product.url, product.buy_price_pence)

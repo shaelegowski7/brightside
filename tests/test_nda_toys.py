@@ -1,8 +1,10 @@
 """NDA Toys wholesale deals scraper: listing-tile parsing (inc-VAT unit
 price, stock status, rel="next" pagination), barcode extraction from a
-product page's <td>Barcode</td> row, and crawl_state-gated crawling -- a
+product page's <td>Barcode</td> row, crawl_state-gated crawling -- a
 product page (the expensive ultra_premium fetch) is only fetched when the
-listing price is new or has changed."""
+listing price is new or has changed -- and the persisted resume cursor
+across category_urls (models.NdaToysCrawlProgress)."""
+from app import models
 from app.sources import nda_toys, scraperapi
 
 
@@ -197,3 +199,111 @@ def test_crawl_stops_listing_on_fetch_failure(db_session, monkeypatch):
         api_key="test-key", min_delay_s=0, max_delay_s=0,
     )
     assert adapter.crawl(db_session, on_deal=lambda raw: None) == 0
+
+
+# --- resume cursor (models.NdaToysCrawlProgress) ---
+
+
+def test_crawl_skips_brands_already_marked_complete(db_session, monkeypatch):
+    """Index 0 is pre-marked complete -- a fresh crawl must skip straight
+    to index 1 without fetching brand 0's listing at all."""
+    brand0 = "https://www.nda-toys.com/1/brand-zero-wholesale"
+    brand1 = "https://www.nda-toys.com/2/brand-one-wholesale"
+    listing1 = _listing_html([_tile(5555555, "widget", "Widget", 10, 0)])
+    product1 = _product_html("111122223333")
+
+    db_session.add(models.NdaToysCrawlProgress(id=1, completed_through_index=0))
+    db_session.commit()
+
+    calls = []
+
+    def fake_fetch(url, api_key, ultra_premium=False):
+        calls.append(url)
+        if url == brand1:
+            return 200, listing1
+        if url == "https://www.nda-toys.com/product/5555555/widget":
+            return 200, product1
+        raise AssertionError(f"unexpected fetch (brand 0 should have been skipped): {url}")
+
+    monkeypatch.setattr(scraperapi, "fetch", fake_fetch)
+    monkeypatch.setattr(nda_toys.time, "sleep", lambda s: None)
+
+    adapter = nda_toys.NdaToysAdapter(
+        category_urls=[brand0, brand1], api_key="test-key", min_delay_s=0, max_delay_s=0,
+    )
+    count = adapter.crawl(db_session, on_deal=lambda raw: None)
+    assert count == 1
+    assert brand0 not in calls
+
+
+def test_crawl_advances_progress_only_on_genuine_completion(db_session, monkeypatch):
+    brand0 = "https://www.nda-toys.com/1/brand-zero-wholesale"
+    brand1 = "https://www.nda-toys.com/2/brand-one-wholesale"
+    listing0 = _listing_html([_tile(6666666, "widget", "Widget", 10, 0)])
+    product0 = _product_html("111122223333")
+
+    def fake_fetch(url, api_key, ultra_premium=False):
+        if url == brand0:
+            return 200, listing0
+        if url == "https://www.nda-toys.com/product/6666666/widget":
+            return 200, product0
+        if url == brand1:
+            return None  # brand 1's own listing fetch fails
+        raise AssertionError(f"unexpected fetch: {url}")
+
+    monkeypatch.setattr(scraperapi, "fetch", fake_fetch)
+    monkeypatch.setattr(nda_toys.time, "sleep", lambda s: None)
+
+    adapter = nda_toys.NdaToysAdapter(
+        category_urls=[brand0, brand1], api_key="test-key", min_delay_s=0, max_delay_s=0,
+    )
+    adapter.crawl(db_session, on_deal=lambda raw: None)
+
+    progress = db_session.get(models.NdaToysCrawlProgress, 1)
+    # brand0 (index 0) completed genuinely -> cursor advances to 0.
+    # brand1 (index 1) failed mid-fetch -> cursor must NOT advance to 1,
+    # so it's retried in full on the next crawl rather than skipped.
+    assert progress.completed_through_index == 0
+
+
+def test_crawl_resumes_from_persisted_index_across_calls(db_session, monkeypatch):
+    brand0 = "https://www.nda-toys.com/1/brand-zero-wholesale"
+    brand1 = "https://www.nda-toys.com/2/brand-one-wholesale"
+    listing0 = _listing_html([_tile(7777777, "widget-a", "Widget A", 10, 0)])
+    listing1 = _listing_html([_tile(8888888, "widget-b", "Widget B", 20, 0)])
+    product0 = _product_html("111100001111")
+    product1 = _product_html("222200002222")
+
+    def fake_fetch(url, api_key, ultra_premium=False):
+        return {
+            brand0: (200, listing0),
+            "https://www.nda-toys.com/product/7777777/widget-a": (200, product0),
+            brand1: (200, listing1),
+            "https://www.nda-toys.com/product/8888888/widget-b": (200, product1),
+        }[url]
+
+    monkeypatch.setattr(scraperapi, "fetch", fake_fetch)
+    monkeypatch.setattr(nda_toys.time, "sleep", lambda s: None)
+
+    adapter = nda_toys.NdaToysAdapter(
+        category_urls=[brand0, brand1], api_key="test-key", min_delay_s=0, max_delay_s=0,
+    )
+
+    first_deals = []
+    adapter.crawl(db_session, on_deal=first_deals.append)
+    assert [d.url for d in first_deals] == [
+        "https://www.nda-toys.com/product/7777777/widget-a",
+        "https://www.nda-toys.com/product/8888888/widget-b",
+    ]
+
+    # A brand-new adapter instance (simulating a fresh process after a
+    # restart) must resume from the persisted cursor, not redo brand 0.
+    calls = []
+    monkeypatch.setattr(scraperapi, "fetch", lambda url, api_key, ultra_premium=False: (calls.append(url), fake_fetch(url, api_key, ultra_premium))[1])
+    second_adapter = nda_toys.NdaToysAdapter(
+        category_urls=[brand0, brand1], api_key="test-key", min_delay_s=0, max_delay_s=0,
+    )
+    second_deals = []
+    second_adapter.crawl(db_session, on_deal=second_deals.append)
+    assert brand0 not in calls
+    assert second_deals == []  # brand1's item is unchanged since the first crawl -> skipped too

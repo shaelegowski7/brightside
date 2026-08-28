@@ -246,3 +246,22 @@ class TokenLog(Base):
     tokens_after = Column(Integer, nullable=True)
     tokens_consumed = Column(Integer, nullable=True)   # best-effort; see keepa_client
     note = Column(String, nullable=True)
+
+
+class NdaToysCrawlProgress(Base):
+    """Single-row resume cursor for NdaToysAdapter -- persists the index
+    into config.yaml's nda_toys.category_urls list of the last brand page
+    whose full listing (every page of it) has been walked to completion.
+    Lets a stopped/restarted crawl skip brands already fully covered
+    instead of re-walking every listing page (each an expensive
+    ultra_premium fetch) from the start every time -- see
+    app/sources/nda_toys.py. Committed after each category_url finishes,
+    not just at the end, so a mid-run interruption only loses progress on
+    the one brand in flight, same reasoning as crawl_state's deferred
+    recording."""
+
+    __tablename__ = "nda_toys_crawl_progress"
+
+    id = Column(Integer, primary_key=True)
+    completed_through_index = Column(Integer, nullable=False, default=-1)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

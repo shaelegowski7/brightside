@@ -50,11 +50,17 @@ class _FakeResponse:
 
 
 def _fees_response() -> _FakeResponse:
+    # Real shape confirmed live 2026-08-29 -- everything sits one level
+    # deeper under "payload" than the OpenAPI model summary suggested (see
+    # spapi_client.py's module docstring); this fixture matches the real
+    # response, not the originally-guessed shape.
     return _FakeResponse({
-        "FeesEstimateResult": {"FeesEstimate": {"FeeDetailList": [
-            {"FeeType": "ReferralFee", "FeeAmount": {"Amount": 3.00}},
-            {"FeeType": "FBAFees", "FeeAmount": {"Amount": 2.25}},
-        ]}}
+        "payload": {
+            "FeesEstimateResult": {"FeesEstimate": {"FeeDetailList": [
+                {"FeeType": "ReferralFee", "FeeAmount": {"Amount": 3.00}},
+                {"FeeType": "FBAFees", "FeeAmount": {"Amount": 2.25}},
+            ]}}
+        }
     })
 
 

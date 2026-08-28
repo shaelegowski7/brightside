@@ -1,11 +1,10 @@
-"""Dormant SP-API client (Phase 2) -- getMyFeesEstimateForASIN (Product Fees
-API v0) + getListingsRestrictions (Listings Restrictions API v2021-08-01).
-No live SP-API credentials were available when this was written (see
-app/pricing/fees.py's module docstring: SP-API was previously dropped
-entirely because there's no Pro-seller developer account to register it
-against) -- every public function here returns None on any failure or when
-unconfigured, so this module has zero effect on current behavior until real
-credentials exist. is_configured() is the single on/off switch.
+"""SP-API client (Phase 2) -- getMyFeesEstimateForASIN (Product Fees API v0)
++ getListingsRestrictions (Listings Restrictions API v2021-08-01). Live since
+2026-08-28 (Solution Provider application approved -- Private developer,
+Pricing + Product Listing roles only, see SECURITY.md). is_configured() is
+still the single on/off switch, and every public function here still returns
+None on any failure so a real outage degrades to the config fee-estimate
+table / unchecked gating rather than crashing the pipeline.
 
 AUTH MODEL -- verified against Amazon's own SP-API changelog, not assumed:
 as of October 2023 SP-API dropped AWS SigV4/IAM signing entirely; every
@@ -15,12 +14,20 @@ Restricted Data Token either) needs only an LWA bearer access token in the
 operations, calls will fail with an auth error from SP-API itself, caught
 and logged here as a None return -- not a crash, not silently wrong data.
 
-FIELD NAMES -- UNVERIFIED. The request/response JSON shapes below (
-FeesEstimateRequest/FeesEstimateResult/FeeDetailList, restrictions[].reasons)
-are my best-effort recollection of the published OpenAPI models, matching
-the same "confirm on first live call" caveat keepa_client.py already uses
-for its own pre-verification field mappings (see its module docstring).
-Confirm against a real response before trusting the parsed values.
+FIELD NAMES -- confirmed against real live responses (2026-08-28/29), not
+just the OpenAPI model summary:
+- getListingsRestrictions: matches what was assumed -- a top-level
+  `restrictions[].reasons[].reasonCode`/`links[].resource` object, no
+  extra wrapper.
+- getMyFeesEstimateForASIN: did NOT match what was assumed. The real
+  response wraps the whole result one level deeper than expected --
+  `payload.FeesEstimateResult.FeesEstimate.FeeDetailList`, not
+  `FeesEstimateResult.FeesEstimate.FeeDetailList`. Everything below that
+  (FeeType values, FeeAmount.Amount as a plain float in major currency
+  units) was already correct. This missing `payload` level meant every
+  real fee lookup since SP-API went live was silently failing to parse
+  and falling back to the config estimate table -- fixed once caught by
+  manually re-running a real fees call and diffing the actual JSON.
 """
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -126,7 +133,13 @@ class FeesEstimateResult:
 
 def _parse_fees_estimate(data: dict) -> FeesEstimateResult | None:
     try:
-        details = data["FeesEstimateResult"]["FeesEstimate"]["FeeDetailList"]
+        # Confirmed live 2026-08-29: the whole result is wrapped one level
+        # deeper than the OpenAPI model summary suggests -- every field
+        # inside is otherwise exactly as guessed (FeeType values, Amount as
+        # a plain float in major currency units), just missing this "payload"
+        # level, which is why every real call was silently falling back to
+        # the config fee-estimate table since SP-API went live.
+        details = data["payload"]["FeesEstimateResult"]["FeesEstimate"]["FeeDetailList"]
         by_type = {d["FeeType"]: round(float(d["FeeAmount"]["Amount"]) * 100) for d in details}
         return FeesEstimateResult(
             referral_fee_pence=by_type.get("ReferralFee", 0),
