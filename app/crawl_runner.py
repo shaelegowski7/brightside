@@ -36,6 +36,7 @@ _SOURCES: list[tuple[str, str, str, str | None]] = [
     ("homebargains", "Home Bargains", "poll_homebargains_clearance", "homebargains"),
     ("johnlewis", "John Lewis", "poll_johnlewis_outlet", "johnlewis"),
     ("pokemon_center", "Pokemon Center", "poll_pokemon_center", "pokemon_center"),
+    ("nda_toys", "NDA Toys", "poll_nda_toys_deals", "nda_toys"),
 ]
 
 

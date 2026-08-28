@@ -18,6 +18,7 @@ from .sources.bq import BQAdapter
 from .sources.homebargains import HomeBargainsAdapter
 from .sources.hotukdeals import HotUKDealsAdapter
 from .sources.johnlewis import JohnLewisAdapter
+from .sources.nda_toys import NdaToysAdapter
 from .sources.pokemon_center import PokemonCenterAdapter
 from .sources.screwfix import ScrewfixAdapter
 from .sources.smyths import SmythsAdapter
@@ -81,6 +82,13 @@ _CLEARANCE_SOURCES: dict[str, _ClearanceSource] = {
     "homebargains": _ClearanceSource("homebargains", HomeBargainsAdapter, needs_api_key=False),
     "johnlewis": _ClearanceSource("johnlewis", JohnLewisAdapter, needs_api_key=False),
     "pokemon_center": _ClearanceSource("pokemon_center", PokemonCenterAdapter, needs_api_key=True),
+    # Deliberately absent from start_scheduler()'s clearance_jobs below --
+    # manual-trigger-only (crawl_runner.py's _SOURCES), not on a timer. Every
+    # fetch here uses ScraperAPI's ultra_premium tier (NDA Toys' bot
+    # protection rejects the standard pool -- see sources/nda_toys.py),
+    # which costs meaningfully more per request than every other source; an
+    # unattended recurring job would burn credits without anyone watching.
+    "nda_toys": _ClearanceSource("nda_toys", NdaToysAdapter, needs_api_key=True),
 }
 
 
@@ -154,6 +162,14 @@ def poll_johnlewis_outlet() -> int:
 
 def poll_pokemon_center() -> int:
     return _run_clearance_poll(_CLEARANCE_SOURCES["pokemon_center"])
+
+
+def poll_nda_toys_deals() -> int:
+    """Manual-trigger-only -- see _CLEARANCE_SOURCES' nda_toys entry.
+    Named/kept as a real top-level function for the same reason as every
+    other poll_* here: crawl_runner._SOURCES and tests call it by exact
+    name via getattr(scheduler, "poll_nda_toys_deals")."""
+    return _run_clearance_poll(_CLEARANCE_SOURCES["nda_toys"])
 
 
 def post_daily_summary() -> None:

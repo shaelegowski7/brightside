@@ -194,6 +194,20 @@ smyths:
   category_urls:
     - "https://www.smythstoys.com/uk/en-gb/sale"
 
+# NDA Toys wholesale deals -- manual-trigger-only (see scheduler.py's
+# _CLEARANCE_SOURCES comment), so no poll_interval_minutes: it's never
+# registered in start_scheduler()'s periodic jobs, only run on-demand via
+# the PWA's "run crawl" button. Every fetch uses ScraperAPI's ultra_premium
+# tier (confirmed live 2026-08-28 -- NDA Toys' bot protection rejects
+# anything less), which costs meaningfully more per request than every
+# other source here.
+nda_toys:
+  enabled: true
+  min_delay_seconds: 5
+  max_delay_seconds: 15
+  category_urls:
+    - "https://www.nda-toys.com/wholesale-toy-deals"
+
 # B&Q (diy.com) clearance scraper. No ScraperAPI needed -- confirmed live
 # 2026-07-24 that diy.com serves full content to a plain request, no bot
 # protection detected (see app/sources/bq.py's module docstring for the full
