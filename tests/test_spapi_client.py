@@ -56,10 +56,13 @@ def _fees_response() -> _FakeResponse:
     # response, not the originally-guessed shape.
     return _FakeResponse({
         "payload": {
-            "FeesEstimateResult": {"FeesEstimate": {"FeeDetailList": [
-                {"FeeType": "ReferralFee", "FeeAmount": {"Amount": 3.00}},
-                {"FeeType": "FBAFees", "FeeAmount": {"Amount": 2.25}},
-            ]}}
+            "FeesEstimateResult": {
+                "Status": "Success",
+                "FeesEstimate": {"FeeDetailList": [
+                    {"FeeType": "ReferralFee", "FeeAmount": {"Amount": 3.00}},
+                    {"FeeType": "FBAFees", "FeeAmount": {"Amount": 2.25}},
+                ]},
+            }
         }
     })
 
@@ -123,6 +126,32 @@ def test_get_access_token_returns_none_on_http_failure(monkeypatch):
     monkeypatch.setattr(spapi_client.requests, "post", fake_post)
 
     assert spapi_client._get_access_token() is None
+
+
+def test_parse_fees_estimate_reads_the_real_payload_shape():
+    parsed = spapi_client._parse_fees_estimate(_fees_response()._json)
+    assert parsed.referral_fee_pence == 300
+    assert parsed.fba_fulfilment_fee_pence == 225
+
+
+def test_parse_fees_estimate_returns_none_on_per_asin_client_error(capsys):
+    """Amazon reports per-ASIN failures in-band with a 200: Status is not
+    Success and FeesEstimate is absent. That's expected (~30% of a live
+    50-ASIN sweep), so it must return None *quietly* -- logging on each one
+    buried the real signal in the scheduler logs."""
+    parsed = spapi_client._parse_fees_estimate({
+        "payload": {"FeesEstimateResult": {
+            "Status": "ClientError",
+            "Error": {"Type": "ClientError", "Message": "Item dimensions unavailable"},
+        }}
+    })
+    assert parsed is None
+    assert capsys.readouterr().out == ""
+
+
+def test_parse_fees_estimate_still_logs_a_genuinely_unexpected_shape(capsys):
+    assert spapi_client._parse_fees_estimate({"something": "else"}) is None
+    assert "unexpected feesEstimate response shape" in capsys.readouterr().out
 
 
 def test_get_fees_estimate_returns_none_when_unconfigured_and_no_cache(db_session, monkeypatch):

@@ -128,6 +128,42 @@ velocity:
   top_category_percentile: 0.02
   category_size_cache_ttl_days: 30
 
+# Reverse candidate search -- ask Keepa for products that already clear
+# every structural gate, then work out what we'd have to source them at.
+# See app/candidate_finder.py's module docstring for why this exists and
+# why min_buybox_pence is the most important number here.
+candidate_finder:
+  enabled: true
+  run_interval_hours: 24
+  # Yield is low by design: of 50 measured live (2026-08-29), 39 were gated
+  # for this account and 9 were renewed/refurbished, leaving 2 real
+  # candidates. Gating is by far the dominant constraint.
+  #
+  # 50, NOT higher, despite that low yield. A 150-result run was measured
+  # on the same day: it took 19m37s because it exhausted the Keepa token
+  # budget mid-run ("Waiting 1082 seconds for additional tokens") and ended
+  # on a NEGATIVE balance -- and that budget is shared with the deal
+  # pipeline, so an over-eager finder run starves the actual scrapers for
+  # the rest of the hour. It only turned up 3 candidates vs 2, so the extra
+  # 100 results bought one find for 18 minutes of blocked tokens.
+  max_results: 50
+  # £20. Below this, FBA fees force an unrealistic discount (a £12 buybox
+  # needs sourcing at £2.81 -- 77% off) so it's not worth the tokens.
+  min_buybox_pence: 2000
+  # £120. Caps capital tied up per unit -- without it the list fills with
+  # £250-450 renewed phones/tablets (they dominate the top sales ranks),
+  # which need hundreds of pounds per unit before a single sale.
+  max_buybox_pence: 12000
+  # Deliberately looser than category_rank_thresholds' 80k for toys: this
+  # is a sourcing shortlist for a human to judge, not an auto-buy gate,
+  # and rank alone is a weak signal once velocity is already filtered on.
+  max_sales_rank: 120000
+  # Keepa rootCategory IDs to restrict to; empty = every category. Left
+  # empty deliberately -- the existing scraper sources already span DIY,
+  # electricals and toys, so there's no reason to look for candidates in
+  # toys alone.
+  root_categories: []
+
 # Argos clearance scraper (Phase 2). Requires SCRAPERAPI_KEY — Argos's Akamai
 # edge blocks every direct request from this app's hosting IP (confirmed
 # 2026-07-20, even robots.txt), so fetches route through ScraperAPI's proxy

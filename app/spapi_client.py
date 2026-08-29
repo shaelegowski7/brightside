@@ -139,15 +139,32 @@ def _parse_fees_estimate(data: dict) -> FeesEstimateResult | None:
         # a plain float in major currency units), just missing this "payload"
         # level, which is why every real call was silently falling back to
         # the config fee-estimate table since SP-API went live.
-        details = data["payload"]["FeesEstimateResult"]["FeesEstimate"]["FeeDetailList"]
+        result = data["payload"]["FeesEstimateResult"]
+    except (KeyError, TypeError):
+        print(f"[SPAPI] unexpected feesEstimate response shape: {list(data)[:5]}")
+        return None
+
+    # Amazon reports per-ASIN failures in-band with a 200: Status is
+    # "ClientError"/"ServerError" and FeesEstimate is simply absent (seen
+    # live on ~30% of a 50-ASIN sweep, 2026-08-29 -- typically ASINs whose
+    # dimensions Amazon can't resolve). That's an expected outcome, not a
+    # shape mismatch, so it returns None quietly and the caller falls back
+    # to the config fee table rather than logging on every one.
+    status = result.get("Status")
+    if status != "Success" or "FeesEstimate" not in result:
+        return None
+
+    try:
+        details = result["FeesEstimate"]["FeeDetailList"]
         by_type = {d["FeeType"]: round(float(d["FeeAmount"]["Amount"]) * 100) for d in details}
-        return FeesEstimateResult(
-            referral_fee_pence=by_type.get("ReferralFee", 0),
-            fba_fulfilment_fee_pence=by_type.get("FBAFees", 0),
-        )
     except (KeyError, TypeError, ValueError) as e:
         print(f"[SPAPI] unexpected feesEstimate response shape: {e}")
         return None
+
+    return FeesEstimateResult(
+        referral_fee_pence=by_type.get("ReferralFee", 0),
+        fba_fulfilment_fee_pence=by_type.get("FBAFees", 0),
+    )
 
 
 def get_fees_estimate(db: Session, asin: str, sell_price_pence: int) -> FeesEstimateResult | None:

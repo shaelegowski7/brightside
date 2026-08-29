@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-from . import discord_notifier, monitoring, pipeline
+from . import candidate_finder, discord_notifier, monitoring, pipeline
 from .config import get_config, get_settings
 from .database import SessionLocal
 from .decision.engine import DecisionConfig
@@ -172,6 +172,30 @@ def poll_nda_toys_deals() -> int:
     return _run_clearance_poll(_CLEARANCE_SOURCES["nda_toys"])
 
 
+def run_candidate_finder() -> int:
+    """Reverse candidate search (see app/candidate_finder.py) -- posts a
+    sourcing shortlist to Discord. Returns the number of NEW candidates
+    reported, for the caller's own logging. Unlike the poll_* functions
+    above this produces no Deals: it's a shopping list for a human, not
+    pipeline input."""
+    app_cfg = get_config()
+    decision_cfg = DecisionConfig.from_app_config(app_cfg)
+
+    db = SessionLocal()
+    try:
+        fee_provider = fees.build_fee_provider(db, app_cfg)
+        candidates = candidate_finder.find_candidates(db, app_cfg, decision_cfg, fee_provider)
+        unseen = candidate_finder.filter_unseen(db, candidates)
+        print(f"[CANDIDATES] {len(candidates)} matched, {len(unseen)} new")
+        if unseen:
+            embed = discord_notifier.build_candidates_embed(unseen)
+            ok = discord_notifier.send_ping(get_settings().discord_webhook_url, embed)
+            print(f"[CANDIDATES] posted {len(unseen)} new candidate(s): {ok}")
+        return len(unseen)
+    finally:
+        db.close()
+
+
 def post_daily_summary() -> None:
     app_cfg = get_config()
     monitoring_cfg = app_cfg.get("monitoring", {})
@@ -275,6 +299,19 @@ def start_scheduler() -> None:
             replace_existing=True,
         )
         print("[SCHEDULER] weekly summary enabled, posting every 168h")
+
+    finder_cfg = app_cfg.get("candidate_finder") or {}
+    if finder_cfg.get("enabled", False):
+        finder_hours = finder_cfg.get("run_interval_hours", 24)
+        scheduler.add_job(
+            run_candidate_finder,
+            IntervalTrigger(hours=finder_hours),
+            id="run_candidate_finder",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        print(f"[SCHEDULER] candidate finder enabled, running every {finder_hours}h")
 
     scheduler.start()
     print(f"[SCHEDULER] started, polling every {interval_minutes}m")

@@ -248,6 +248,28 @@ class TokenLog(Base):
     note = Column(String, nullable=True)
 
 
+class CandidateAsin(Base):
+    """Products found by candidate_finder.py that already clear every
+    structural gate in decision/engine.py -- persisted purely so a
+    scheduled run reports only genuinely new finds instead of re-posting
+    the same shopping list every day. NOT deals: no buy price is known
+    for these, nobody has sourced them, and they never enter the pipeline
+    (see candidate_finder.py's module docstring). Prices are refreshed on
+    every sighting since Amazon's buybox moves the target with it."""
+
+    __tablename__ = "candidate_asins"
+
+    asin = Column(String, primary_key=True)
+    title = Column(String, nullable=True)
+    buybox_price = Column(Integer, nullable=False)        # pence
+    target_buy_price = Column(Integer, nullable=False)    # pence -- source at/below this
+    sales_rank = Column(Integer, nullable=True)
+    fba_offer_count = Column(Integer, nullable=True)
+    est_monthly_sales = Column(Float, nullable=True)
+    first_seen = Column(DateTime(timezone=True), default=utcnow)
+    last_seen = Column(DateTime(timezone=True), default=utcnow)
+
+
 class NdaToysCrawlProgress(Base):
     """Single-row resume cursor for NdaToysAdapter -- persists the index
     into config.yaml's nda_toys.category_urls list of the last brand page

@@ -55,11 +55,20 @@ _IDX_COUNT_NEW_FBA = 34
 
 _client: "keepa.Keepa | None" = None
 
+# keepa's own default is 10s, which a batched stage2_full sits right on top
+# of: a 50-ASIN offers=20 query measured ~10s against the live API
+# (2026-08-29), so it fails intermittently and a 100-ASIN batch -- which
+# stage2_full's own docstring invites -- fails reliably. In production this
+# surfaced as "processing error: ... Read timed out. (read timeout=10.0)"
+# in the scheduler logs, silently losing every item in the batch. Matches
+# the 60s used for the ScraperAPI proxy in sources/scraperapi.py.
+_REQUEST_TIMEOUT_S = 60.0
+
 
 def _get_client() -> "keepa.Keepa":
     global _client
     if _client is None:
-        _client = keepa.Keepa(get_settings().keepa_api_key)
+        _client = keepa.Keepa(get_settings().keepa_api_key, timeout=_REQUEST_TIMEOUT_S)
     return _client
 
 
@@ -258,6 +267,25 @@ def search_by_term(db: Session, term: str) -> Stage1Result | None:
     if not asins:
         return None
     return stage1_screen(db, [asins[0]], is_ean=False).get(asins[0])
+
+
+def find_asins(db: Session, params: dict, n_products: int) -> list[str]:
+    """Raw Keepa Product Finder passthrough for candidate_finder.py -- the
+    reverse of every other lookup in this module, which all start from a
+    code/ASIN we already have. `params` is Keepa's own ProductParams shape
+    (see candidate_finder._build_finder_params for the mapping from
+    config.yaml), deliberately not wrapped in our own schema: Keepa's
+    filter vocabulary is far richer than anything we'd model, and the
+    caller is the only thing that knows which filters matter.
+
+    Finder requests cost meaningfully more tokens than a plain product
+    lookup (same caveat as title_search above), which is why the caller
+    runs this on a schedule rather than per-item."""
+    client = _get_client()
+    tokens_before = client.tokens_left
+    asins = client.product_finder(params, domain=KEEPA_DOMAIN, wait=True, n_products=n_products)
+    _log_tokens(db, "candidate_finder", len(asins), tokens_before, client.tokens_left)
+    return asins
 
 
 def stage1_screen_passes(result: Stage1Result, buy_price_pence: int, cfg: DecisionConfig, fees: FeeProvider) -> tuple[bool, str | None]:

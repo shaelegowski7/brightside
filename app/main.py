@@ -10,12 +10,12 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from . import auth, crawl_runner, dashboard, monitoring, purchases, scan, schemas
+from . import auth, crawl_runner, dashboard, models, monitoring, purchases, scan, schemas
 from .config import get_config, get_settings
 from .database import engine, get_db
 from .decision.engine import DecisionConfig
 from .pricing import fees
-from .scheduler import scheduler, start_scheduler
+from .scheduler import run_candidate_finder, scheduler, start_scheduler
 
 app = FastAPI(title="FBA Deal Scanner")
 
@@ -133,6 +133,45 @@ def trigger_crawl(
     sources = body.sources if body else None
     started, status = crawl_runner.start_crawl(sources)
     return {"started": started, **status}
+
+
+@app.post("/candidates/refresh")
+def refresh_candidates(_: auth.AuthedUser = Depends(auth.require_user)):
+    """Runs the reverse candidate search on demand (it's also on a timer,
+    see scheduler.run_candidate_finder). Synchronous, unlike /crawl: one
+    Keepa finder call plus a single batched stage2 lookup takes seconds,
+    not the minutes a full multi-source crawl does, so there's no reason
+    for the background-thread + polling machinery here."""
+    return {"new_candidates": run_candidate_finder()}
+
+
+@app.get("/candidates.json")
+def candidates_json(db: Session = Depends(get_db), _: auth.AuthedUser = Depends(auth.require_user)):
+    """Current sourcing shortlist, cheapest-to-source-relative-to-Amazon
+    first (i.e. most realistic asks first, same ordering as the Discord
+    post). These are targets, not deals -- see candidate_finder.py."""
+    rows = (
+        db.query(models.CandidateAsin)
+        .order_by((models.CandidateAsin.target_buy_price / models.CandidateAsin.buybox_price).desc())
+        .limit(200)
+        .all()
+    )
+    return [
+        {
+            "asin": r.asin,
+            "title": r.title,
+            "buybox_price_pence": r.buybox_price,
+            "target_buy_price_pence": r.target_buy_price,
+            "discount_required_pct": round(1 - (r.target_buy_price / r.buybox_price), 4) if r.buybox_price else None,
+            "sales_rank": r.sales_rank,
+            "fba_offer_count": r.fba_offer_count,
+            "est_monthly_sales": r.est_monthly_sales,
+            "amazon_url": f"https://www.amazon.co.uk/dp/{r.asin}",
+            "first_seen": r.first_seen,
+            "last_seen": r.last_seen,
+        }
+        for r in rows
+    ]
 
 
 @app.get("/crawl/status")

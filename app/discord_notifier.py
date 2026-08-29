@@ -211,6 +211,35 @@ def build_weekly_summary_embed(summary: dict) -> dict:
     }
 
 
+def build_candidates_embed(candidates: list) -> dict:
+    """Sourcing shortlist from candidate_finder.py -- deliberately NOT a
+    deal alert: nothing here has been sourced or scored, these are
+    products worth trying to buy at the stated price. Sorted by the
+    discount required so the most realistic targets read first (a 40%-off
+    ask is a conversation with a wholesaler; an 80%-off ask usually
+    isn't). Discord caps an embed's description at 4096 chars, so the
+    list is truncated well short of that with a count of the remainder."""
+    ordered = sorted(candidates, key=lambda c: c.discount_required_pct)
+    lines = []
+    for c in ordered[:15]:
+        title = (c.title or c.asin)[:60]
+        lines.append(
+            f"**{_money(c.target_buy_price_pence)}** or less — {title}\n"
+            f"  sells {_money(c.buybox_price_pence)} · {c.discount_required_pct:.0%} off · "
+            f"{c.fba_offer_count} FBA · "
+            f"https://www.amazon.co.uk/dp/{c.asin}"
+        )
+    remainder = len(ordered) - 15
+    if remainder > 0:
+        lines.append(f"\n_…and {remainder} more._")
+
+    return {
+        "title": f"{len(candidates)} new sourcing candidate{'s' if len(candidates) != 1 else ''}",
+        "description": "\n".join(lines) or "None found.",
+        "color": COLOR_GREEN,
+    }
+
+
 def send_ping(webhook_url: str, embed: dict) -> bool:
     try:
         resp = requests.post(webhook_url, json={"embeds": [embed]}, timeout=_TIMEOUT_SECONDS)
