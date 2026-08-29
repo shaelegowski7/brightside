@@ -139,7 +139,13 @@ def _build_finder_params(finder_cfg: dict, cfg: DecisionConfig) -> dict:
     # n_products alone does NOT lift Keepa's 50-per-page default: asking for
     # 150 without this silently returns exactly 50 (confirmed live
     # 2026-08-29). perPage is the real control.
-    params["perPage"] = finder_cfg.get("max_results", 50)
+    #
+    # Floored at 50 because Keepa REJECTS anything smaller outright --
+    # perPage=15 comes back REQUEST_REJECTED while every other parameter in
+    # the same query is accepted (isolated live, 2026-08-29). Without this
+    # floor, lowering max_results below 50 to save tokens would silently
+    # break the whole job rather than shrinking it.
+    params["perPage"] = max(50, finder_cfg.get("max_results", 50))
     return params
 
 

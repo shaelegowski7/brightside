@@ -119,6 +119,16 @@ def test_finder_params_set_perpage_to_max_results():
     assert params["perPage"] == 150
 
 
+def test_finder_params_floor_perpage_at_50():
+    """Keepa rejects perPage below 50 outright (REQUEST_REJECTED, isolated
+    live 2026-08-29), so a small max_results must not be passed through --
+    it would break the query rather than shrink it."""
+    params = candidate_finder._build_finder_params(
+        {"max_sales_rank": 1000, "min_buybox_pence": 100, "max_results": 15}, _cfg()
+    )
+    assert params["perPage"] == 50
+
+
 def test_finder_params_include_max_buybox_when_set():
     cfg = _cfg()
     capped = candidate_finder._build_finder_params(
