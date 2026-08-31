@@ -163,6 +163,18 @@ candidate_finder:
   # electricals and toys, so there's no reason to look for candidates in
   # toys alone.
   root_categories: []
+  # Minimum competing FBA offers. Confirmed live 2026-08-31: sorting by
+  # best rank among low-offer listings (the default finder sort) came back
+  # 27/27 candidates with fba_offer_count == 1 -- every one a sole-source
+  # private-label ASIN (Enzeno, TUMELLA, FOHERE, Pronto Seed...) where the
+  # single existing seller almost certainly owns the only supply. There is
+  # usually no wholesale channel to join for these -- you'd be sourcing a
+  # different product and mismatching it onto someone else's brand listing
+  # (same trap as the SanDisk V60/V30 mix-up in the Rashmian scan).
+  # min_fba_offers >= 2 trades away that "zero competition" appeal for
+  # proof a real, joinable supply chain already exists: if 2+ FBA sellers
+  # are already competing on the same ASIN, someone found a real source.
+  min_fba_offers: 2
 
 # Argos clearance scraper (Phase 2). Requires SCRAPERAPI_KEY — Argos's Akamai
 # edge blocks every direct request from this app's hosting IP (confirmed

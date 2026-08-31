@@ -110,6 +110,27 @@ def test_finder_params_mirror_the_engine_gates():
     assert params["current_SALES_gte"] == 1
 
 
+def test_finder_params_min_fba_offers_defaults_to_no_floor():
+    """Backward compatible: a config without min_fba_offers must not
+    accidentally start excluding sole-source listings that older configs
+    never asked to filter out."""
+    params = candidate_finder._build_finder_params(
+        {"max_sales_rank": 120000, "min_buybox_pence": 2000}, _cfg()
+    )
+    assert params["buyBoxEligibleOfferCountsNewFBA_gte"] == 1
+
+
+def test_finder_params_min_fba_offers_configured():
+    """Confirmed live 2026-08-31: sorting by best rank among low-offer
+    listings systematically surfaces sole-source (offers==1) private-label
+    ASINs with no provable supply chain to join -- min_fba_offers filters
+    those out at the query level instead of relying on a human to notice."""
+    params = candidate_finder._build_finder_params(
+        {"max_sales_rank": 120000, "min_buybox_pence": 2000, "min_fba_offers": 2}, _cfg()
+    )
+    assert params["buyBoxEligibleOfferCountsNewFBA_gte"] == 2
+
+
 def test_finder_params_set_perpage_to_max_results():
     """n_products alone doesn't lift Keepa's 50-per-page default -- without
     perPage a request for 150 silently returns 50."""
@@ -255,3 +276,77 @@ def test_find_candidates_skips_products_that_cannot_clear_thresholds(db_session,
     found = candidate_finder.find_candidates(db_session, app_cfg, _cfg(), fee_provider)
     assert [c.asin for c in found] == ["B0GOOD"]
     assert found[0].target_buy_price_pence > 0
+
+
+def test_find_candidates_skips_amazon_on_listing(db_session, monkeypatch):
+    """The finder query's buyBoxIsAmazon=False is only a snapshot of the
+    current buy-box winner, not a check that Amazon has no live offer at
+    all -- confirmed live 2026-08-31: 19 of the top 30 lowest-discount
+    candidates from the 2026-08-29 run passed the finder's buyBoxIsAmazon
+    filter but came back amazon_on_listing=True on a fresh stage2 lookup,
+    meaning score_deal would have hard-rejected every one of them. This
+    product would otherwise clear every other gate -- it must still be
+    dropped once stage2's real amazon_on_listing check is available."""
+    monkeypatch.setattr(keepa_client, "find_asins", lambda db, params, n: ["B0AMZN"])
+
+    def fake_stage2(db, asins):
+        return {
+            "B0AMZN": keepa_client.Stage2Result(
+                asin="B0AMZN", title="Contested", category="Toys & Games", sales_rank=5000,
+                buybox_price_pence=3000, amazon_on_listing=True, fba_offer_count=2,
+                lowest_fba_offer_pence=None, est_monthly_sales=40.0, buybox_avg_90d_pence=3000,
+                rank_history_days=400, hazmat=False, package_weight_kg=0.2,
+                package_longest_cm=10.0, package_dims_sum_cm=20.0,
+                fba_fulfilment_fee_pence=200, referral_fee_percentage=15.0,
+                leaf_category_id=None, leaf_category_rank=None,
+            ),
+        }
+
+    monkeypatch.setattr(keepa_client, "stage2_full", fake_stage2)
+
+    from app.config import get_config
+    from app.pricing import fees as fees_module
+
+    app_cfg = dict(get_config())
+    app_cfg["candidate_finder"] = {"max_sales_rank": 120000, "min_buybox_pence": 2000, "max_results": 50}
+    fee_provider = fees_module.build_fee_provider(db_session, app_cfg)
+
+    found = candidate_finder.find_candidates(db_session, app_cfg, _cfg(), fee_provider)
+    assert found == []
+
+
+def test_find_candidates_reverifies_min_fba_offers_against_stage2(db_session, monkeypatch):
+    """The finder's buyBoxEligibleOfferCountsNewFBA_gte is also just a
+    query-time snapshot -- confirmed live 2026-08-31: 4 of 9 candidates
+    that cleared min_fba_offers=2 at the finder came back fba_offer_count
+    == 1 on the stage2 refresh (a competing seller had already dropped
+    off). Must be re-checked against live stage2 data, not trusted from
+    the finder alone -- same lesson as amazon_on_listing above."""
+    monkeypatch.setattr(keepa_client, "find_asins", lambda db, params, n: ["B0SOLO"])
+
+    def fake_stage2(db, asins):
+        return {
+            "B0SOLO": keepa_client.Stage2Result(
+                asin="B0SOLO", title="Went sole-source", category="Toys & Games", sales_rank=5000,
+                buybox_price_pence=3000, amazon_on_listing=False, fba_offer_count=1,
+                lowest_fba_offer_pence=None, est_monthly_sales=40.0, buybox_avg_90d_pence=3000,
+                rank_history_days=400, hazmat=False, package_weight_kg=0.2,
+                package_longest_cm=10.0, package_dims_sum_cm=20.0,
+                fba_fulfilment_fee_pence=200, referral_fee_percentage=15.0,
+                leaf_category_id=None, leaf_category_rank=None,
+            ),
+        }
+
+    monkeypatch.setattr(keepa_client, "stage2_full", fake_stage2)
+
+    from app.config import get_config
+    from app.pricing import fees as fees_module
+
+    app_cfg = dict(get_config())
+    app_cfg["candidate_finder"] = {
+        "max_sales_rank": 120000, "min_buybox_pence": 2000, "max_results": 50, "min_fba_offers": 2,
+    }
+    fee_provider = fees_module.build_fee_provider(db_session, app_cfg)
+
+    found = candidate_finder.find_candidates(db_session, app_cfg, _cfg(), fee_provider)
+    assert found == []
