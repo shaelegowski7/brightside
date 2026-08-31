@@ -1,0 +1,3 @@
+sku,title,make,model,year_from,year_to,haynes_number,isbn,condition,price_gbp,quantity,category_id,condition_description,image_urls
+HAY-0001,,Ford,Fiesta,1995,2002,3397,9781859606667,USED_GOOD,8.99,1,,Cover has light shelf wear; all pages present and clean.,https://example.com/img/hay-0001-front.jpg|https://example.com/img/hay-0001-back.jpg
+HAY-0002,,Vauxhall,Corsa,2000,2003,3921,9781844250417,USED_VERY_GOOD,10.50,1,,Very good condition with minimal markings.,https://example.com/img/hay-0002-front.jpg

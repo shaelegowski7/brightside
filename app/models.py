@@ -287,3 +287,33 @@ class NdaToysCrawlProgress(Base):
     id = Column(Integer, primary_key=True)
     completed_through_index = Column(Integer, nullable=False, default=-1)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class EbayListing(Base):
+    """One row per SKU we have tried to list on eBay -- the record of what
+    the lister actually did, so a re-run is resumable and a partial batch
+    is diagnosable. eBay's bulk endpoints report per-item failures in-band
+    with an HTTP 200 (see ebay_client.py), so "the call succeeded" is never
+    enough on its own; `status` is the per-item verdict.
+
+    Deliberately keyed on our own `sku`, not eBay's ids: the SKU is the one
+    identifier that exists before any eBay call is made, which is what lets
+    a crashed run pick up where it left off."""
+
+    __tablename__ = "ebay_listings"
+
+    sku = Column(String, primary_key=True)
+    title = Column(String, nullable=False)
+    isbn = Column(String, nullable=True, index=True)
+    condition = Column(String, nullable=False)      # eBay ConditionEnum, e.g. USED_GOOD
+    price_pence = Column(Integer, nullable=False)
+    quantity = Column(Integer, nullable=False, default=1)
+    category_id = Column(String, nullable=True)
+    # 'pending' -> 'inventory_created' -> 'offer_created' -> 'published',
+    # or 'failed' at whichever stage stopped it (last_error says which).
+    status = Column(String, nullable=False, default="pending", index=True)
+    offer_id = Column(String, nullable=True, index=True)
+    listing_id = Column(String, nullable=True, index=True)
+    last_error = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

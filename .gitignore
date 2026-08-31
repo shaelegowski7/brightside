@@ -9,3 +9,4 @@ pwa/node_modules/
 pwa/dist/
 pwa/.env
 .claude/
+.vercel
