@@ -319,7 +319,8 @@ def _chunks(items: list, size: int = _BULK_MAX):
 # --------------------------------------------------------------------------
 
 def bulk_create_or_replace_inventory_items(items: list[dict]) -> list[BulkItemResult]:
-    """items: [{"sku": ..., "inventoryItem": {...}}]. Chunked at 25."""
+    """items: InventoryItemWithSkuLocale dicts -- sku/locale/condition/
+    product/availability all as siblings, no wrapper key. Chunked at 25."""
     results: list[BulkItemResult] = []
     for chunk in _chunks(items):
         data = _request("POST", "/sell/inventory/v1/bulk_create_or_replace_inventory_item",
@@ -336,6 +337,24 @@ def bulk_create_offers(offers: list[dict]) -> list[BulkItemResult]:
                         body={"requests": chunk})
         results.extend(_bulk_results(data, [o.get("sku", "") for o in chunk]))
     return results
+
+
+def withdraw_offer(offer_id: str) -> bool:
+    """POST /offer/{offerId}/withdraw -- ends the live listing but keeps the
+    offer object (now unpublished, republishable later via publishOffer).
+    No request body. Used for e.g. retiring a duplicate listing after its
+    quantity has been folded into another SKU's offer."""
+    return _request("POST", f"/sell/inventory/v1/offer/{offer_id}/withdraw") is not None
+
+
+def update_offer(offer_id: str, body: dict) -> bool:
+    """PUT /offer/{offerId} -- a *complete* replacement of the offer, per
+    eBay's docs: every field that makes up the offer is required on every
+    call, not just the ones being changed. There is no bulk variant, unlike
+    create/publish. Needed for fixing an already-created offer (e.g. it was
+    created against the wrong marketplace's business policies) without
+    withdrawing and recreating it."""
+    return _request("PUT", f"/sell/inventory/v1/offer/{offer_id}", body=body) is not None
 
 
 def bulk_publish_offers(offer_ids: list[str]) -> list[BulkItemResult]:

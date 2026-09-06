@@ -276,7 +276,16 @@ def build_inventory_item(row: ManualRow) -> dict:
     if row.condition_description and row.condition != "NEW":
         # eBay only permits conditionDescription on used conditions.
         item["conditionDescription"] = row.condition_description
-    return {"sku": row.sku, "locale": "en_GB", "inventoryItem": item}
+    # bulkCreateOrReplaceInventoryItem's request items are shaped as
+    # InventoryItemWithSkuLocale: sku/locale/condition/product/availability
+    # are ALL siblings -- there is no nested "inventoryItem" wrapper, unlike
+    # what this shape used to be. eBay silently reads an unrecognised
+    # wrapper as an empty item (errorId 25002, "payload is empty") rather
+    # than rejecting the unknown key, which made this bug invisible short of
+    # an actual API call.
+    item["sku"] = row.sku
+    item["locale"] = "en_GB"
+    return item
 
 
 def build_offer(row: ManualRow, category_id: str = "") -> dict:

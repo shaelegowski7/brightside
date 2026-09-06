@@ -120,10 +120,13 @@ def test_load_csv_round_trips_the_shipped_template():
 
 def test_inventory_item_payload_shape():
     row = ebay_lister.parse_rows([_raw()])[0][0]
-    payload = ebay_lister.build_inventory_item(row)
+    item = ebay_lister.build_inventory_item(row)
 
-    assert payload["sku"] == "HAY-0001"
-    item = payload["inventoryItem"]
+    # InventoryItemWithSkuLocale -- sku/locale/condition/product/
+    # availability are all siblings. eBay silently treats a nested wrapper
+    # key as an empty item (errorId 25002) rather than rejecting it, so this
+    # flat shape is the one thing here worth locking down with a test.
+    assert item["sku"] == "HAY-0001"
     assert item["condition"] == "USED_GOOD"
     assert item["availability"]["shipToLocationAvailability"]["quantity"] == 1
     # Aspect values are lists of strings even when single -- a bare string
@@ -138,7 +141,7 @@ def test_inventory_item_payload_shape():
 
 def test_condition_description_is_omitted_for_new_items():
     row = ebay_lister.parse_rows([_raw(condition="NEW")])[0][0]
-    assert "conditionDescription" not in ebay_lister.build_inventory_item(row)["inventoryItem"]
+    assert "conditionDescription" not in ebay_lister.build_inventory_item(row)
 
 
 def test_offer_payload_shape():

@@ -10,3 +10,4 @@ pwa/dist/
 pwa/.env
 .claude/
 .vercel
+.env.*.backup
