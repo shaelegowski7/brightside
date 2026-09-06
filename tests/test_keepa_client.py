@@ -4,6 +4,10 @@ its internals). Covers the amazon_on_listing fix: it must reflect whether
 Amazon has a live new-condition offer, not just momentary buy-box
 ownership (see keepa_client.py's module docstring for the false-negative
 that prompted this, caught on B0BXX8X7DM 2026-07-28)."""
+import pytest
+import requests
+from urllib3.exceptions import ProtocolError
+
 from app import keepa_client
 
 
@@ -80,3 +84,57 @@ def test_amazon_on_listing_true_even_when_buybox_is_amazon_flag_stale(db_session
     results = keepa_client.stage2_full(db_session, ["B0TEST0001"])
 
     assert results["B0TEST0001"].amazon_on_listing is False
+
+
+class _FlakyClient:
+    """Raises `exc` on the first `fail_times` calls, then succeeds."""
+
+    def __init__(self, exc: Exception, fail_times: int):
+        self.tokens_left = 100
+        self._exc = exc
+        self._left = fail_times
+        self.calls = 0
+
+    def query(self, *args, **kwargs):
+        self.calls += 1
+        if self._left > 0:
+            self._left -= 1
+            raise self._exc
+        return ["ok"]
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        requests.exceptions.ConnectionError("connection aborted"),
+        # The three that killed real multi-hour scans while the retry
+        # clause still caught only ConnectionError -- a socket dropped
+        # during a long Keepa token-wait surfaces as any of these.
+        requests.exceptions.ChunkedEncodingError("connection broken"),
+        requests.exceptions.ReadTimeout("read timed out"),
+        ProtocolError("Remote end closed connection without response"),
+    ],
+    ids=["connection", "chunked_encoding", "read_timeout", "protocol"],
+)
+def test_query_with_retry_recovers_from_dropped_socket(exc, monkeypatch):
+    monkeypatch.setattr(keepa_client.time, "sleep", lambda _s: None)
+    client = _FlakyClient(exc, fail_times=1)
+    assert keepa_client._query_with_retry(client) == ["ok"]
+    assert client.calls == 2
+
+
+def test_query_with_retry_reraises_after_last_attempt(monkeypatch):
+    monkeypatch.setattr(keepa_client.time, "sleep", lambda _s: None)
+    client = _FlakyClient(requests.exceptions.ReadTimeout("gone"), fail_times=99)
+    with pytest.raises(requests.exceptions.ReadTimeout):
+        keepa_client._query_with_retry(client)
+    assert client.calls == keepa_client._QUERY_RETRIES
+
+
+def test_query_with_retry_does_not_swallow_programming_errors(monkeypatch):
+    """A bad request is a bug, not a flaky socket -- it must surface at once."""
+    monkeypatch.setattr(keepa_client.time, "sleep", lambda _s: None)
+    client = _FlakyClient(ValueError("bad argument"), fail_times=99)
+    with pytest.raises(ValueError):
+        keepa_client._query_with_retry(client)
+    assert client.calls == 1

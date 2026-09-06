@@ -211,41 +211,91 @@ def get_fees_estimate(db: Session, asin: str, sell_price_pence: int) -> FeesEsti
     return result
 
 
-def _parse_gating(data: dict) -> bool | None:
+@dataclass
+class GatingResult:
+    """`gated` is not a decision on its own -- see reason_code.
+
+    APPROVAL_REQUIRED means there is an application path (Amazon returns the
+    Seller Central deep link in approval_url); a qualifying trade invoice
+    normally clears it, which is exactly what wholesale sourcing produces.
+    NOT_ELIGIBLE means no path exists and the SKU is dead. Collapsing both
+    to `gated=True` throws away the difference between "paperwork" and
+    "never", so callers making buying decisions should read reason_code.
+    """
+
+    gated: bool
+    reason_code: str | None      # comma-separated + sorted if an ASIN carries several
+    approval_url: str | None
+
+
+def _parse_gating(data: dict) -> GatingResult | None:
     try:
         restrictions = data["restrictions"]
-        return any(r.get("reasons") for r in restrictions)
+        reasons = [rn for r in restrictions for rn in (r.get("reasons") or [])]
     except (KeyError, TypeError) as e:
         print(f"[SPAPI] unexpected restrictions response shape: {e}")
         return None
 
+    if not reasons:
+        return GatingResult(gated=False, reason_code=None, approval_url=None)
 
-def check_gating(db: Session, asin: str) -> bool | None:
+    codes = sorted({rn.get("reasonCode") for rn in reasons if rn.get("reasonCode")})
+    url = next(
+        (link.get("resource") for rn in reasons for link in (rn.get("links") or [])
+         if link.get("resource")),
+        None,
+    )
+    return GatingResult(gated=True, reason_code=",".join(codes) or None, approval_url=url)
+
+
+def check_gating_detail(db: Session, asin: str) -> GatingResult | None:
     """Spec: "Cache gating results per ASIN for 7 days." Same fail-open
-    template as get_fees_estimate."""
+    template as get_fees_estimate.
+
+    A single live read is authoritative but a *failed* one must never be
+    written -- a wrong value would then be served from cache for a full
+    week, and 7 days is long enough to plan and place a real order against
+    it. So a None from the API leaves any existing row untouched.
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(days=_GATING_CACHE_TTL_DAYS)
     cached = db.get(models.GatingCache, asin)
+
+    def _from_cache() -> GatingResult | None:
+        if cached is None:
+            return None
+        return GatingResult(cached.gated, cached.reason_code, cached.approval_url)
+
     if cached is not None:
         fetched_at = cached.fetched_at if cached.fetched_at.tzinfo else cached.fetched_at.replace(tzinfo=timezone.utc)
         if fetched_at >= cutoff:
-            return cached.gated
+            return _from_cache()
 
     if not is_configured():
-        return cached.gated if cached else None
+        return _from_cache()
 
     s = get_settings()
     data = _get(
         "/listings/2021-08-01/restrictions",
         {"asin": asin, "sellerId": s.spapi_seller_id, "marketplaceIds": s.spapi_marketplace_id, "conditionType": "new_new"},
     )
-    gated = _parse_gating(data) if data else None
-    if gated is None:
-        return cached.gated if cached else None
+    result = _parse_gating(data) if data else None
+    if result is None:
+        return _from_cache()
 
     if cached is None:
         cached = models.GatingCache(asin=asin)
         db.add(cached)
-    cached.gated = gated
+    cached.gated = result.gated
+    cached.reason_code = result.reason_code
+    cached.approval_url = result.approval_url
     cached.fetched_at = models.utcnow()
     db.commit()
-    return gated
+    return result
+
+
+def check_gating(db: Session, asin: str) -> bool | None:
+    """Bool-only view of check_gating_detail, for callers that only filter
+    on gated/not (pipeline.py's scoring path). Prefer check_gating_detail
+    anywhere the APPROVAL_REQUIRED vs NOT_ELIGIBLE distinction matters."""
+    result = check_gating_detail(db, asin)
+    return result.gated if result else None
