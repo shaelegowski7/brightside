@@ -172,6 +172,22 @@ def _build_finder_params(finder_cfg: dict, cfg: DecisionConfig) -> dict:
       returnRate_lte       -- high-return SKUs eat margin invisibly: the
                               returned unit is often unsellable and the FBA
                               fee is already spent.
+      buyBoxStatsSellerCount365_gte
+                           -- distinct sellers who held the buy box over the
+                              last year, used as a SOURCEABILITY proxy. The
+                              finder's real failure mode is not gating, it is
+                              returning structurally perfect products nobody
+                              can buy: the 2026-09-06 run came back mostly
+                              Chinese private label (TESSAN, COOLJOYA,
+                              Dinosoo, Enzeno...) with no UK trade route at
+                              all. min_fba_offers only counts sellers
+                              competing *today*, which a brand owner plus two
+                              of its own accounts satisfies. A product many
+                              different sellers have won the box on over a
+                              year is, by definition, one multiple resellers
+                              can buy -- i.e. it has a distribution channel
+                              to join. That is the question a sourcing
+                              shortlist actually needs answered.
       page                 -- pagination. Without it the finder re-reads the
                               same best-ranked window every run -- 2
                               CandidateAsin rows exist after a fortnight of
@@ -218,6 +234,9 @@ def _build_finder_params(finder_cfg: dict, cfg: DecisionConfig) -> dict:
     return_rate_bands = finder_cfg.get("return_rate_bands") or []
     if return_rate_bands:
         params["returnRate"] = list(return_rate_bands)
+    min_sellers_365 = finder_cfg.get("min_distinct_buybox_sellers_365")
+    if min_sellers_365 is not None:
+        params["buyBoxStatsSellerCount365_gte"] = min_sellers_365
     page = finder_cfg.get("page")
     if page:
         params["page"] = page

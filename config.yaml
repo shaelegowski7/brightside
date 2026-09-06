@@ -190,6 +190,14 @@ candidate_finder:
   # means "low" is not confirmed against Keepa's docs, and a wrong band here
   # silently shrinks the result set with no error. Verify, then set.
   return_rate_bands: []
+  # Distinct sellers who held the buy box over the last 365 days -- the
+  # SOURCEABILITY filter, and the one that matters most for a shopping list.
+  # min_fba_offers counts who is competing today, which a brand owner plus a
+  # couple of its own accounts satisfies; the 2026-09-06 run came back almost
+  # entirely Chinese private label (TESSAN, COOLJOYA, Dinosoo, Enzeno) with
+  # no UK trade route. A product many different sellers have won the box on
+  # over a year demonstrably HAS a distribution channel to join.
+  min_distinct_buybox_sellers_365: 5
   # Which page of results to fetch (1-based; unset/0 = page 1). There was no
   # pagination before, so every daily run re-read the same best-ranked 50 --
   # which is why only 2 CandidateAsin rows exist after a fortnight of runs.
