@@ -73,6 +73,20 @@ class Candidate:
     # rather than silently dropped. NOT_ELIGIBLE never reaches here.
     gating: str | None = None
 
+    def months_to_clear(self, units: int) -> float | None:
+        """How long an order of `units` takes to sell through, assuming the
+        buy box splits evenly between us and the existing FBA sellers.
+
+        The number that actually decides a wholesale order: velocity alone
+        is misleading because it ignores who you're splitting it with. Same
+        share model as engine.py's est_months_to_sell, but uncapped -- the
+        engine clamps to 6 months to bound its storage-cost estimate, which
+        is exactly the information you want to see here.
+        """
+        if not self.est_monthly_sales:
+            return None
+        return units * (self.fba_offer_count + 1) / self.est_monthly_sales
+
     @property
     def discount_required_pct(self) -> float:
         """How far below the Amazon price we'd need to source, as a
@@ -206,7 +220,19 @@ def _build_finder_params(finder_cfg: dict, cfg: DecisionConfig) -> dict:
         "buyBoxIsAmazon": False,
         "buyBoxEligibleOfferCountsNewFBA_lte": cfg.max_fba_offers,
         "buyBoxEligibleOfferCountsNewFBA_gte": finder_cfg.get("min_fba_offers", 1),
-        "monthlySold_gte": int(cfg.velocity_min_monthly_sales),
+        # Finder-specific floor, deliberately higher than the engine's
+        # velocity gate: engine.py asks "does this sell at all", the finder
+        # asks "can we clear a wholesale order of it". Buying 100 units of
+        # something selling 50/mo against 2 competitors is 6 months of
+        # capital and storage; at 200/mo the worst case on the 2026-09-06
+        # list is 2.5 months. Falls back to the engine floor if unset.
+        #
+        # Note Keepa BUCKETS monthlySold and its lowest bucket is 50 -- the
+        # previous value of 10 was never really asking for 10, since nothing
+        # below 50 exists in the data. 200 is the first threshold that
+        # actually filters anything (36 of 52 survive).
+        "monthlySold_gte": int(finder_cfg.get("min_monthly_sold")
+                               or cfg.velocity_min_monthly_sales),
         "current_BUY_BOX_SHIPPING_gte": finder_cfg["min_buybox_pence"],
         "productType": [0],
         "sort": [["current_SALES", "asc"]],

@@ -190,6 +190,16 @@ candidate_finder:
   # means "low" is not confirmed against Keepa's docs, and a wrong band here
   # silently shrinks the result set with no error. Verify, then set.
   return_rate_bands: []
+  # Minimum units sold per month. Higher than velocity.min_monthly_sales on
+  # purpose: that gate asks "does this sell at all", this one asks "can we
+  # clear a wholesale order of it". Buying 100 units of something selling
+  # 50/mo against 2 competitors is 6 months of capital and storage; on the
+  # 2026-09-06 list the >=50/mo tail ran to 14 months, while >=200/mo capped
+  # the worst case at 2.5 months (36 of 52 survived).
+  #
+  # Keepa BUCKETS monthlySold and its lowest bucket is 50, so the previous
+  # value of 10 was never really asking for 10 -- nothing below 50 exists.
+  min_monthly_sold: 200
   # Distinct sellers who held the buy box over the last 365 days -- the
   # SOURCEABILITY filter, and the one that matters most for a shopping list.
   # min_fba_offers counts who is competing today, which a brand owner plus a
