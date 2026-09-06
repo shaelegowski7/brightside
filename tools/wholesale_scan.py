@@ -105,13 +105,24 @@ _PACK_PATTERNS = [
 ]
 
 
-def _pack_multiplier(text: str | None) -> int:
-    """Best-effort estimate of how many sellable units a title implies, by
-    multiplying together each distinct nesting level found (e.g. "Case of 8
-    Packs of 12" -> 8 * 12 = 96). Defaults to 1 (no multipack language
-    found) -- never returns 0."""
+def _pack_multiplier(text: str | None) -> int | None:
+    """How many sellable units a title implies, multiplying each distinct
+    nesting level found (e.g. "Case of 8 Packs of 12" -> 8 * 12 = 96).
+    Text with no multipack language returns 1.
+
+    Returns **None** when there is no text to read, which is not the same
+    answer as 1 and must not be collapsed into it. This previously returned
+    1 for a missing title, so an absent Keepa title compared equal to a
+    feed's implied 1 and the pack-size check silently passed. That is how
+    every Pharmazon candidate reached the report unflagged while the real
+    ASINs were "Euthymol ... Pack of 5", "6 x Deep Heat Heat Rub 100g",
+    "Cymex Cream for Cold Sores x 6" and so on (verified against the live
+    listings, 2026-09-06) -- priced as singles, they showed 300-550% ROI;
+    priced as the 5- and 6-packs they actually are, four of five lose
+    money. Unknown has to stay visibly unknown.
+    """
     if not text:
-        return 1
+        return None
     t = text.lower()
     found = []
     for pat in _PACK_PATTERNS:
@@ -128,6 +139,23 @@ def _pack_multiplier(text: str | None) -> int:
     for n in sorted(set(found), reverse=True):
         total *= n
     return total
+
+
+def _bundle_units(feed_mult: int | None, asin_mult: int | None) -> int:
+    """How many feed units go into one sale on this ASIN.
+
+    Buying N singles and shipping them as a set is ordinary FBA bundling,
+    so a bigger ASIN pack is a cost multiplier, not a reject. Only whole
+    multiples count: a 3-unit feed item against a 2-pack ASIN is not
+    something you can assemble, so it stays at 1 and the caller flags it
+    for a human. Unknown on either side also stays at 1 -- scoring at face
+    value and saying so beats inventing a multiplier.
+    """
+    if feed_mult is None or asin_mult is None:
+        return 1
+    if asin_mult > feed_mult and asin_mult % feed_mult == 0:
+        return asin_mult // feed_mult
+    return 1
 
 
 def _stage1_by_ean(db, eans_batch: list[str], source_name: str) -> dict[str, tuple[str, Stage1Result]]:
@@ -309,8 +337,21 @@ def _run_scan(source_name: str, rows: list[FeedRow]) -> None:
                     if category_size:
                         category_rank_percentile = stage2.leaf_category_rank / category_size
 
+                # --- pack size: price what the ASIN actually sells ---
+                # The feed sells one unit; the ASIN may be a multipack. Buying
+                # N singles and shipping them as a set is ordinary FBA
+                # bundling, so a mismatch is not a reject -- it is a different
+                # cost base. Score it at N x the unit price and let the
+                # economics decide, rather than crediting a 6-pack's sale
+                # price against one unit's cost (which is what produced
+                # Pharmazon's phantom 300-550% ROIs). Unknown ASIN pack size
+                # means unknown cost, so score at face value but say so.
+                feed_mult = _pack_multiplier(row.name)
+                asin_mult = _pack_multiplier(stage2.title)
+                units_per_sale = _bundle_units(feed_mult, asin_mult)
+
                 score_input = ScoreInput(
-                    buy_price_pence=row.buy_price_pence,
+                    buy_price_pence=row.buy_price_pence * units_per_sale,
                     match_confidence="high",   # EAN match, same confidence tier as jsonld in pipeline.py
                     category=stage2.category or "",
                     fba_offer_count=stage2.fba_offer_count,
@@ -330,16 +371,30 @@ def _run_scan(source_name: str, rows: list[FeedRow]) -> None:
                 )
                 result = score_deal(score_input, cfg)
                 flags = list(result.flags)
-                feed_mult = _pack_multiplier(row.name)
-                asin_mult = _pack_multiplier(stage2.title)
-                if asin_mult != feed_mult:
+                if asin_mult is None:
+                    flags.append(
+                        "pack_size_unknown: no Amazon title to read a pack size from, "
+                        "scored as 1 unit per sale -- confirm on the listing before ordering"
+                    )
+                elif units_per_sale > 1:
+                    flags.append(
+                        f"requires_bundling: {units_per_sale} units per sale "
+                        f"(Amazon title {stage2.title!r} implies x{asin_mult}, feed unit implies "
+                        f"x{feed_mult}) -- costed at {units_per_sale}x, and needs prep "
+                        "(poly-bag, label, suffocation warning) not priced in here"
+                    )
+                elif asin_mult != feed_mult:
                     flags.append(
                         f"pack_size_mismatch: feed name implies x{feed_mult}, "
-                        f"Amazon title ({stage2.title!r}) implies x{asin_mult}"
+                        f"Amazon title ({stage2.title!r}) implies x{asin_mult} -- not a whole "
+                        "multiple, so NOT repriced; check the listing by hand"
                     )
                 entry = {
                     "asin": asin, "ean": ean, "brand": row.brand, "name": row.name,
+                    "title": stage2.title,
                     "buy_price_pence": row.buy_price_pence, "list_price": row.list_price, "note": row.note,
+                    "units_per_sale": units_per_sale,
+                    "bundle_cost_pence": row.buy_price_pence * units_per_sale,
                     "sell_price_pence": result.sell_price_pence, "net_profit_pence": result.net_profit_pence,
                     "roi": result.roi, "sales_rank": stage2.sales_rank, "fba_offer_count": stage2.fba_offer_count,
                     "verdict": result.verdict.value, "verdict_reason": result.verdict_reason, "flags": flags,
@@ -373,9 +428,18 @@ def _run_scan(source_name: str, rows: list[FeedRow]) -> None:
             gated = "unchecked" if g is None else ((g.reason_code or "yes") if g.gated else "no")
             approval = f"\n  apply: {g.approval_url}" if g and g.approval_url else ""
             note = f" ({r['note']})" if r["note"] else ""
+            # Report the cost actually scored. For a bundle that is N units,
+            # not one -- printing the unit price next to a multipack's sale
+            # price is exactly the juxtaposition that made losing candidates
+            # look like 500% ROI.
+            units = r.get("units_per_sale", 1)
+            cost_pence = r.get("bundle_cost_pence", r["buy_price_pence"])
+            cost_str = f"{cost_pence/100:.2f}"
+            if units > 1:
+                cost_str += f" ({units} x {r['buy_price_pence']/100:.2f})"
             f.write(
                 f"{r['brand']} | {r['name']}\n"
-                f"  ASIN {r['asin']} | EAN {r['ean']} | cost {r['buy_price_pence']/100:.2f} "
+                f"  ASIN {r['asin']} | EAN {r['ean']} | cost {cost_str} "
                 f"(list {r['list_price']:.2f}{note})\n"
                 f"  sell {r['sell_price_pence']/100:.2f} | net_profit {r['net_profit_pence']/100:.2f} "
                 f"| roi {r['roi']:.1%} | rank {r['sales_rank']} | offers {r['fba_offer_count']} "
