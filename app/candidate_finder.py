@@ -67,6 +67,11 @@ class Candidate:
     sales_rank: int | None
     fba_offer_count: int
     est_monthly_sales: float | None
+    # None when open (or unchecked). "APPROVAL_REQUIRED" means listable once
+    # a qualifying trade invoice is submitted -- worth sourcing for, but not
+    # worth sourcing for FIRST, so it is carried through to the report
+    # rather than silently dropped. NOT_ELIGIBLE never reaches here.
+    gating: str | None = None
 
     @property
     def discount_required_pct(self) -> float:
@@ -143,6 +148,41 @@ def _build_finder_params(finder_cfg: dict, cfg: DecisionConfig) -> dict:
       monthlySold_gte              -- velocity.min_monthly_sales
       current_BUY_BOX_SHIPPING_gte -- min_buybox_pence, see module docstring
       productType=[0]              -- physical goods only
+
+    Filters are free. Keepa charges per product returned, not per criterion,
+    so every gate pushed into the query is one we don't spend tokens
+    discovering afterwards. Four more, added 2026-09-06:
+
+      buyBoxStatsAmazon90_lte -- percent of the last 90 days Amazon held the
+                              buy box. buyBoxIsAmazon above is a snapshot and
+                              misses Amazon sharing a listing; this asks the
+                              same question historically, and is what would
+                              have caught the 19-of-30 false positives up
+                              front rather than on a refresh pass. It does
+                              NOT replace the stage2 amazon_on_listing check
+                              in find_candidates, which stays.
+      packageQuantity_lte  -- units in the manufacturer's package. A
+                              multipack ASIN needs N supplier units per sale,
+                              so a target price computed per unit is wrong by
+                              a factor of N -- the error that put phantom
+                              300-1500% ROIs on the Pharmazon and Novanex
+                              reports (see wholesale_scan._bundle_units).
+                              Restricting to singles keeps the shopping list
+                              one-to-one with what a supplier actually sells.
+      returnRate_lte       -- high-return SKUs eat margin invisibly: the
+                              returned unit is often unsellable and the FBA
+                              fee is already spent.
+      page                 -- pagination. Without it the finder re-reads the
+                              same best-ranked window every run -- 2
+                              CandidateAsin rows exist after a fortnight of
+                              daily runs, which is a query problem, not a
+                              market one. The sort is stable, so page N is
+                              the same window run to run and filter_unseen
+                              stays meaningful.
+
+    Every one of these is optional: leave the config key unset and the
+    filter is omitted entirely rather than sent with a default, since a
+    wrong bound silently shrinks the result set with no error.
     """
     params = {
         "current_SALES_gte": 1,
@@ -161,6 +201,26 @@ def _build_finder_params(finder_cfg: dict, cfg: DecisionConfig) -> dict:
     root_categories = finder_cfg.get("root_categories") or []
     if root_categories:
         params["rootCategory"] = root_categories
+
+    # All optional -- an unset key means "don't send this filter", not
+    # "send a default". A bound we invented would quietly shrink the result
+    # set with no error to notice.
+    amazon_bb_pct = finder_cfg.get("max_amazon_buybox_pct_90d")
+    if amazon_bb_pct is not None:
+        params["buyBoxStatsAmazon90_lte"] = amazon_bb_pct
+    max_pack_qty = finder_cfg.get("max_package_quantity")
+    if max_pack_qty is not None:
+        params["packageQuantity_lte"] = max_pack_qty
+    # returnRate is an enum band list (list[int]), NOT a range -- there is no
+    # returnRate_lte, and passing one is rejected outright by the client's
+    # own validation. Passed straight through so the meaning of the bands
+    # lives in config next to the value, rather than being guessed here.
+    return_rate_bands = finder_cfg.get("return_rate_bands") or []
+    if return_rate_bands:
+        params["returnRate"] = list(return_rate_bands)
+    page = finder_cfg.get("page")
+    if page:
+        params["page"] = page
     # n_products alone does NOT lift Keepa's 50-per-page default: asking for
     # 150 without this silently returns exactly 50 (confirmed live
     # 2026-08-29). perPage is the real control.
@@ -233,15 +293,28 @@ def find_candidates(
             continue
 
         # Last, because it's the only check that costs a network call.
-        # Only a definite True excludes: check_gating returns None when
-        # SP-API is unreachable or the response is unparseable, and
-        # treating "unknown" as "gated" would silently empty the list on
-        # any SP-API wobble. Same convention as engine.py, which only
-        # hard-rejects on gated is True.
+        #
+        # Only NOT_ELIGIBLE excludes. This used to drop everything gated,
+        # which threw away most of the list: 39 of 50 in the 2026-08-29 run
+        # were recorded gated, and that measurement came from a bool parser
+        # that could not tell APPROVAL_REQUIRED from NOT_ELIGIBLE. Checked
+        # properly on 2026-09-06, all 22 wholesale candidates split 15 open
+        # / 7 APPROVAL_REQUIRED / 0 NOT_ELIGIBLE -- nothing was actually
+        # shut. APPROVAL_REQUIRED wants a qualifying trade invoice, which is
+        # the one document wholesale sourcing produces as a side effect, so
+        # for a *sourcing shortlist* it is a paperwork step, not a
+        # disqualification. It is kept and marked, and the caller decides.
+        #
+        # None still means unknown, never gated: SP-API being unreachable
+        # must not silently empty the list. Same convention as engine.py.
+        gating_note = None
         if check_gating:
             time.sleep(_GATING_DELAY_S)
-            if spapi_client.check_gating(db, asin) is True:
-                continue
+            gate = spapi_client.check_gating_detail(db, asin)
+            if gate is not None and gate.gated:
+                if gate.reason_code and "NOT_ELIGIBLE" in gate.reason_code:
+                    continue
+                gating_note = gate.reason_code or "GATED"
 
         candidates.append(Candidate(
             asin=asin,
@@ -251,6 +324,7 @@ def find_candidates(
             sales_rank=stage2.sales_rank,
             fba_offer_count=stage2.fba_offer_count,
             est_monthly_sales=stage2.est_monthly_sales,
+            gating=gating_note,
         ))
     return candidates
 

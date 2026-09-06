@@ -123,10 +123,22 @@ price_sanity:
 #   leaf_category_rank) — root-level percentile is too coarse to mean
 #   anything (verified live: top 2% of a 22M-product root category is a
 #   looser bound than the existing default_rank_threshold).
+#
+# proxy_multiplier: when est_monthly_sales came from the rank-drop proxy
+# (Keepa's real monthlySold badge wasn't available) rather than confirmed
+# real data, the min_monthly_sales floor is multiplied by this before the
+# gate checks it. Added 2026-09-06 after two ancientwisdom PASS items
+# (coconut lamp, shamanic drum) both turned out to sell ~1/month in
+# SellerAmp despite a proxy estimate clearing the un-multiplied 10/month
+# floor — a ~10x overestimate on both. Two data points, so 5x here is a
+# deliberately cautious margin, not a calibrated correction; a PASS that
+# only clears the gate via the proxy still carries a "velocity_unconfirmed"
+# flag in the report regardless of this multiplier (see engine.py).
 velocity:
   min_monthly_sales: 10
   top_category_percentile: 0.02
   category_size_cache_ttl_days: 30
+  proxy_multiplier: 5
 
 # Reverse candidate search -- ask Keepa for products that already clear
 # every structural gate, then work out what we'd have to source them at.
@@ -158,6 +170,31 @@ candidate_finder:
   # is a sourcing shortlist for a human to judge, not an auto-buy gate,
   # and rank alone is a weak signal once velocity is already filtered on.
   max_sales_rank: 120000
+  # --- filters added 2026-09-06 ---
+  # Filters are free: Keepa bills per product returned, not per criterion,
+  # so anything gated here costs nothing and saves the tokens we'd spend
+  # discovering it later. Unset any key to omit that filter entirely.
+  #
+  # Max % of the last 90 days Amazon held the buy box. buyBoxIsAmazon is a
+  # snapshot only -- 19 of the top 30 candidates on 2026-08-29 passed it and
+  # still had Amazon competing on refresh. 0 = Amazon never held the box.
+  max_amazon_buybox_pct_90d: 0
+  # Singles only. A multipack ASIN needs N supplier units per sale, so a
+  # per-unit target price is wrong by a factor of N -- the error behind the
+  # phantom 300-1500% ROIs on the Pharmazon and Novanex reports.
+  max_package_quantity: 1
+  # Keepa's return-rate filter is an enum BAND LIST (returnRate: [..]), not
+  # a range -- there is no returnRate_lte and sending one is rejected. Left
+  # empty on purpose: returns do eat margin invisibly (the unit often comes
+  # back unsellable and the FBA fee is already spent), but which integer
+  # means "low" is not confirmed against Keepa's docs, and a wrong band here
+  # silently shrinks the result set with no error. Verify, then set.
+  return_rate_bands: []
+  # Which page of results to fetch (1-based; unset/0 = page 1). There was no
+  # pagination before, so every daily run re-read the same best-ranked 50 --
+  # which is why only 2 CandidateAsin rows exist after a fortnight of runs.
+  # Walk this up to cover the real matching set.
+  page: 1
   # Keepa rootCategory IDs to restrict to; empty = every category. Left
   # empty deliberately -- the existing scraper sources already span DIY,
   # electricals and toys, so there's no reason to look for candidates in
