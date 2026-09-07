@@ -279,17 +279,32 @@ def _build_finder_params(finder_cfg: dict, cfg: DecisionConfig) -> dict:
     return params
 
 
-def find_candidates(
-    db: Session, app_cfg: dict, cfg: DecisionConfig, fee_provider: FeeProvider
-) -> list[Candidate]:
-    """Runs the finder query, then a real stage2 lookup on the results so
-    fees/storage are computed from each product's actual dimensions and
-    competition rather than the finder's coarser filter data. Skips
-    anything whose target buy price lands at 0 (can't clear the
-    thresholds at any price)."""
-    finder_cfg = app_cfg.get("candidate_finder") or {}
+def discover_asins(db: Session, app_cfg: dict, cfg: DecisionConfig, page: int | None = None) -> list[str]:
+    """Just the Keepa Product Finder call -- which ASINs match the filters.
+
+    Split out from scoring because the two cost wildly different amounts:
+    measured live 2026-09-06, a finder page of 50 ASINs costs ~11 tokens
+    while stage2 on those same 50 costs ~300, i.e. discovery is ~27x
+    cheaper per product. That makes it worth enumerating the whole matching
+    set exhaustively (399 ASINs over 8 pages, 88 tokens total) before
+    spending anything on scoring, instead of discovering and scoring 50 at
+    a time and never learning how big the pool actually is.
+    """
+    finder_cfg = dict(app_cfg.get("candidate_finder") or {})
+    if page is not None:
+        finder_cfg["page"] = page
     params = _build_finder_params(finder_cfg, cfg)
-    asins = keepa_client.find_asins(db, params, finder_cfg.get("max_results", 50))
+    return keepa_client.find_asins(db, params, finder_cfg.get("max_results", 50))
+
+
+def score_asins(
+    db: Session, asins: list[str], app_cfg: dict, cfg: DecisionConfig, fee_provider: FeeProvider
+) -> list[Candidate]:
+    """Real stage2 lookup on `asins`, so fees/storage come from each
+    product's actual dimensions and competition rather than the finder's
+    coarser filter data. Skips anything whose target buy price lands at 0
+    (can't clear the thresholds at any price)."""
+    finder_cfg = app_cfg.get("candidate_finder") or {}
     if not asins:
         return []
 
@@ -309,6 +324,20 @@ def find_candidates(
         # candidates that cleared min_fba_offers=2 at the finder came back
         # fba_offer_count==1 here). Re-check against the fresh data.
         if stage2.fba_offer_count < finder_cfg.get("min_fba_offers", 1):
+            continue
+        # And the price band, for the same reason: the buy box can fall
+        # below min_buybox_pence between the finder call and this refresh.
+        # Two of 177 candidates in the 2026-09-06 full scan came back under
+        # the £20 floor, one at £14.49 needing 68% off -- precisely the
+        # sub-£20 band the module docstring exists to keep out, arriving
+        # through the back door because the floor was only ever enforced at
+        # discovery. The ceiling is re-checked too: capital per unit is the
+        # reason it exists, and that argument doesn't care when the price moved.
+        min_bb = finder_cfg.get("min_buybox_pence")
+        max_bb = finder_cfg.get("max_buybox_pence")
+        if min_bb and stage2.buybox_price_pence < min_bb:
+            continue
+        if max_bb and stage2.buybox_price_pence > max_bb:
             continue
         if stage2.title and _EXCLUDED_TITLE_RE.search(stage2.title):
             continue
@@ -372,6 +401,17 @@ def find_candidates(
             gating=gating_note,
         ))
     return candidates
+
+
+def find_candidates(
+    db: Session, app_cfg: dict, cfg: DecisionConfig, fee_provider: FeeProvider
+) -> list[Candidate]:
+    """Discover one page and score it -- the original single-page entry
+    point, kept for the daily scheduler job. To sweep the whole matching
+    set instead, call discover_asins() across pages first and hand the
+    collected ASINs to score_asins(): see discover_asins' docstring for why
+    separating them matters at these token prices."""
+    return score_asins(db, discover_asins(db, app_cfg, cfg), app_cfg, cfg, fee_provider)
 
 
 def filter_unseen(db: Session, candidates: list[Candidate]) -> list[Candidate]:
