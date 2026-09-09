@@ -11,3 +11,28 @@ pwa/.env
 .claude/
 .vercel
 .env.*.backup
+
+# Catalogue-scan artefacts. Regenerable and, since 2026-09-09, redundant:
+# every scanned product is persisted to supplier_scan_results (see
+# app/models.py). The .jsonl checkpoints remain the resume mechanism and
+# tools/backfill_scan_results.py can replay them, but they are working
+# files, not source.
+*_stage1_checkpoint.jsonl
+*_stage2_checkpoint.jsonl
+*_candidates.txt
+*_scan.log
+cosmetics_recovered_eans.json
+keepa_scan_checkpoint.jsonl
+keepa_scan_scored.txt
+keepa_matching_asins.json
+sourcing_data.json
+sourcing_channels.json
+sourcing_list.txt
+candidates_2026-*.txt
+
+# Supplier feeds that a tool regenerates. vp_feed.csv is deliberately NOT
+# ignored: it was transcribed by hand from a PDF-style price list and there
+# is no scraper that can rebuild it.
+data/ancientwisdom_feed.csv
+data/honeypot_feed.csv
+rashmian_candidates_limited.txt
