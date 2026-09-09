@@ -5,6 +5,20 @@
 thresholds:
   min_roi: 0.30                # hard-reject below this (spec default: 30%)
   min_net_profit_pence: 300    # hard-reject below this (spec default: £3)
+  # Optional coarse floor on the Amazon sell price for the catalogue-first
+  # path. LEAVE AT 0 unless you specifically want to skip a whole list.
+  #
+  # This was briefly set to 2000 to stop scans burning lookups on stock too
+  # cheap to carry FBA fees, and that was wrong: a flat floor assumes the
+  # goods cost a meaningful share of the sale, and at clearance prices they
+  # do not. Break-even for £3 net moves with the buy price —
+  #   buy £0.01 -> £7.50 sell     buy £2.37 -> £10.50 sell
+  #   buy £1.25 -> £9.00 sell     buy £8.00 -> £17.25 sell
+  # so £20 would have thrown away the viable half of a £1.25-median
+  # cosmetics list. The real filter is min_net_profit_pence, now enforced at
+  # stage 1 as well as stage 2 (see keepa_client.stage1_screen_passes): it
+  # uses each item's own fees and buy price, so it needs no guess.
+  min_sell_price_pence: 0
   max_fba_offers: 6            # hard-reject above this offer count
   rank_history_min_days: 90    # soft flag "<90 days of rank history" below this
   price_spike_pct: 0.20        # soft flag if buy box >20% above 90-day average
@@ -135,7 +149,13 @@ price_sanity:
 # only clears the gate via the proxy still carries a "velocity_unconfirmed"
 # flag in the report regardless of this multiplier (see engine.py).
 velocity:
-  min_monthly_sales: 10
+  # Raised 10 -> 50 on 2026-09-09. Two reasons, and they agree. First, it is
+  # now an explicit sourcing criterion: nothing is worth stocking below ~50
+  # sales/month. Second, it matches the data's own resolution — Keepa's
+  # monthlySold badge is bucketed and its LOWEST bucket is 50, so any figure
+  # under that never came from confirmed data, only from the rank-drop proxy
+  # that overestimated the coconut lamp and shamanic drum ~10x.
+  min_monthly_sales: 50
   top_category_percentile: 0.02
   category_size_cache_ttl_days: 30
   proxy_multiplier: 5

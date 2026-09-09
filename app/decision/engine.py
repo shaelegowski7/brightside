@@ -54,6 +54,7 @@ class ScoreInput:
     fees: FeeInput
     sales_rank: int | None = None
     est_monthly_sales: float | None = None
+    est_monthly_sales_source: str | None = None   # "keepa_confirmed" | "rank_drop_proxy" | None — see velocity gate
     buybox_price_pence: int | None = None
     lowest_fba_offer_pence: int | None = None
     buybox_avg_90d_pence: int | None = None
@@ -89,8 +90,13 @@ class DecisionConfig:
     default_rank_threshold: int
     category_blocklist: set
     inbound_shipping_pence: int
+    # Defaults to 0 so an explicitly-constructed config (tests, callers that
+    # predate this) behaves exactly as before; the real floor comes from
+    # config.yaml via from_app_config.
+    min_sell_price_pence: int = 0
     velocity_min_monthly_sales: float = 10.0
     velocity_top_percentile: float = 0.02
+    velocity_proxy_multiplier: float = 5.0
 
     @classmethod
     def from_app_config(cls, cfg: dict) -> "DecisionConfig":
@@ -110,8 +116,10 @@ class DecisionConfig:
             default_rank_threshold=default_rank_threshold,
             category_blocklist=set(cfg.get("category_blocklist") or []),
             inbound_shipping_pence=cfg["decision"]["inbound_shipping_pence"],
+            min_sell_price_pence=thresholds.get("min_sell_price_pence", 0),
             velocity_min_monthly_sales=velocity_cfg.get("min_monthly_sales", 10.0),
             velocity_top_percentile=velocity_cfg.get("top_category_percentile", 0.02),
+            velocity_proxy_multiplier=velocity_cfg.get("proxy_multiplier", 5.0),
         )
 
 
@@ -138,6 +146,8 @@ def score_deal(inp: ScoreInput, cfg: DecisionConfig) -> ScoreResult:
         return _reject("no_sell_price", None)
 
     # --- hard filters (checked before spending effort on the money maths) ---
+    if sell_price < cfg.min_sell_price_pence:
+        return _reject(f"sell price {sell_price}p below {cfg.min_sell_price_pence}p floor", sell_price)
     if inp.category in cfg.category_blocklist:
         return _reject("category_blocklisted", sell_price)
     if inp.amazon_on_listing:
@@ -164,14 +174,39 @@ def score_deal(inp: ScoreInput, cfg: DecisionConfig) -> ScoreResult:
     # see keepa_client._leaf_category's docstring for why that would be
     # almost meaningless (root categories can run into the tens of millions
     # of products). category_rank_percentile is None whenever leaf-category
-    # data wasn't available, in which case only the sales-volume leg counts. ---
-    sales_ok = (inp.est_monthly_sales or 0) >= cfg.velocity_min_monthly_sales
+    # data wasn't available, in which case only the sales-volume leg counts.
+    #
+    # est_monthly_sales is NOT one signal -- it's either Keepa's own real
+    # "bought in past month" badge (est_monthly_sales_source ==
+    # "keepa_confirmed") or, when that's absent, a fallback proxy counting
+    # sales-rank drops over 30 days (source == "rank_drop_proxy"). Confirmed
+    # live 2026-09-06 on two separate ancientwisdom PASS items (coconut lamp,
+    # shamanic drum): SellerAmp's real sales data showed ~1/month on both,
+    # against a proxy estimate that had cleared the 10/month floor -- a ~10x
+    # overestimate, consistently, on the only two checked so far. Two data
+    # points isn't enough to calibrate a precise correction factor, but it's
+    # enough to say the proxy can't be trusted at face value: proxy-sourced
+    # estimates need to clear a much higher bar (velocity_proxy_multiplier,
+    # default 5x) before they're allowed through the same gate real Keepa
+    # data would pass at 1x. A PASS that only cleared the gate this way still
+    # gets flagged below so the report doesn't present it with the same
+    # confidence as a keepa_confirmed or rank-percentile pass. ---
+    effective_sales_floor = cfg.velocity_min_monthly_sales
+    if inp.est_monthly_sales_source == "rank_drop_proxy":
+        effective_sales_floor *= cfg.velocity_proxy_multiplier
+    sales_ok = (inp.est_monthly_sales or 0) >= effective_sales_floor
     rank_ok = inp.category_rank_percentile is not None and inp.category_rank_percentile <= cfg.velocity_top_percentile
     if not (sales_ok or rank_ok):
         return _reject(
             f"velocity_floor: est_monthly_sales={inp.est_monthly_sales} "
+            f"(source={inp.est_monthly_sales_source}, floor={effective_sales_floor}) "
             f"category_rank_percentile={inp.category_rank_percentile}",
             sell_price,
+        )
+    if sales_ok and not rank_ok and inp.est_monthly_sales_source == "rank_drop_proxy":
+        flags.append(
+            f"velocity_unconfirmed: passed on a rank-drop estimate ({inp.est_monthly_sales:.0f}/mo), "
+            "not Keepa's real sales data -- verify manually (e.g. SellerAmp) before ordering"
         )
 
     # --- financials ---

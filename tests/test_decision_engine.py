@@ -220,3 +220,42 @@ def test_roi_below_threshold_rejects_after_financials():
     assert "roi" in result.verdict_reason
     assert result.net_profit_pence is not None
     assert result.roi < 0.30
+
+
+def test_rejects_below_min_sell_price_floor():
+    """Sub-floor stock is rejected outright, however cheaply it was bought.
+
+    The Valupak vitamin list (2026-09-08) is the case this encodes: 46 SKUs
+    selling at £6.65-£13.98, where FBA fees alone take ~£7.50 of a £9 sale.
+    Bought at 50p the ROI looks superb, which is exactly why the ROI check
+    alone never caught these.
+    """
+    inp = ScoreInput(
+        buy_price_pence=50,
+        match_confidence="high",
+        category="Toys & Games",
+        fba_offer_count=2,
+        amazon_on_listing=False,
+        sales_rank=20000,
+        est_monthly_sales=60,
+        buybox_price_pence=896,          # £8.96 — real Valupak glucosamine listing
+        buybox_avg_90d_pence=896,
+        rank_history_days=200,
+        fees=FeeInput(
+            referral_fee_pence=134,
+            fba_fulfilment_fee_pence=250,
+            monthly_storage_fee_pence=5,
+            estimated=False,
+        ),
+    )
+    result = score_deal(inp, default_config(min_sell_price_pence=2000))
+    assert result.verdict is Verdict.REJECT
+    assert "below 2000p floor" in result.verdict_reason
+    # The floor must not swallow the price it rejected on — the report needs it.
+    assert result.sell_price_pence == 896
+
+
+def test_min_sell_price_floor_defaults_to_off():
+    """Configs built without the floor behave exactly as they did before it
+    existed, so nothing that predates this change silently changes verdict."""
+    assert default_config().min_sell_price_pence == 0

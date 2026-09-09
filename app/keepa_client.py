@@ -340,6 +340,14 @@ def stage1_screen_passes(result: Stage1Result, buy_price_pence: int, cfg: Decisi
     if result.est_sell_price_pence is None:
         # No price history at all to screen on — let stage 2 make the real call.
         return True, None
+    # Optional coarse floor. Off by default (0) — the net-profit check below
+    # is strictly better, because it uses this item's real fees and real buy
+    # price instead of one number for every catalogue. Kept for the case
+    # where you already know a whole list is beneath consideration and want
+    # to skip it without reasoning per row.
+    if result.est_sell_price_pence < cfg.min_sell_price_pence:
+        return False, (f"sell price {result.est_sell_price_pence}p below "
+                       f"{cfg.min_sell_price_pence}p floor")
 
     fee_input = fees.get_fees(result.category or "", result.est_sell_price_pence, dims=None)
     fee_vat_mult = 1.0 if cfg.vat_registered else 1.20
@@ -348,6 +356,16 @@ def stage1_screen_passes(result: Stage1Result, buy_price_pence: int, cfg: Decisi
         result.est_sell_price_pence - total_fees - fee_input.monthly_storage_fee_pence
         - cfg.inbound_shipping_pence - buy_price_pence
     )
+    # Absolute profit, not just ROI. These are different tests and the cheap
+    # end of a catalogue only fails the first: a lipstick bought at £1.25 and
+    # sold at £6 shows a fat ROI on a profit of pennies, and £3 of that is
+    # eaten by fees whatever the ROI says. Stage 2 has always rejected these
+    # on min_net_profit — checking it here too is what stops the lookup being
+    # spent to learn it. Both numbers here are best-case (no offer
+    # competition), so anything failing this cannot pass stage 2 either.
+    if optimistic_net_profit < cfg.min_net_profit_pence:
+        return False, (f"optimistic net profit {optimistic_net_profit}p < "
+                       f"{cfg.min_net_profit_pence}p on best-case assumptions")
     optimistic_roi = optimistic_net_profit / buy_price_pence
     if optimistic_roi < cfg.min_roi:
         return False, f"optimistic roi {optimistic_roi:.1%} < {cfg.min_roi:.0%} on best-case assumptions"
