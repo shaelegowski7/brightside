@@ -25,14 +25,53 @@ over (see app/candidate_finder.py's same convention). Locally this is moot
 anyway since SP-API creds live on Railway only.
 """
 import json
+import os
 import re
+import socket
 import sys
 import time
 import traceback
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from app import keepa_client, spapi_client
+
+def _fix_railway_internal_db_url() -> None:
+    """Run BEFORE app.database is imported (it builds its engine at import
+    time from whatever DATABASE_URL says).
+
+    These scans want Railway's SP-API credentials, and the way to get them
+    locally is `railway run -- python tools/scan_x_feed.py`. But that also
+    injects Railway's *internal* DATABASE_URL (postgres.railway.internal),
+    which only resolves inside Railway's own network -- locally every scan
+    dies instantly with "could not translate host name". The local .env has
+    the public proxy URL for the same database.
+
+    So: if DATABASE_URL points at an unresolvable .railway.internal host and
+    .env offers a different one, use .env's. Checked by actually resolving
+    the name rather than pattern-matching alone, so this stays inert when
+    the code really is running inside Railway.
+    """
+    url = os.environ.get("DATABASE_URL", "")
+    if ".railway.internal" not in url:
+        return
+    host = url.split("@")[-1].split("/")[0].split(":")[0]
+    try:
+        socket.getaddrinfo(host, None)
+        return                      # resolves -- we're inside Railway, leave it
+    except socket.gaierror:
+        pass
+    try:
+        from dotenv import dotenv_values
+        local = dotenv_values(Path(__file__).resolve().parent.parent / ".env").get("DATABASE_URL")
+    except Exception:
+        local = None
+    if local and local != url:
+        os.environ["DATABASE_URL"] = local
+        print(f"[SCAN] {host} is unreachable from here -- using .env's DATABASE_URL instead")
+
+_fix_railway_internal_db_url()   # MUST precede app.database's import-time engine build
+
+from app import keepa_client, scan_store, spapi_client
 from app.config import get_config
 from app.database import SessionLocal
 from app.decision.engine import DecisionConfig, ScoreInput, Verdict, score_deal
@@ -397,6 +436,15 @@ def _run_scan(source_name: str, rows: list[FeedRow]) -> None:
                     "bundle_cost_pence": row.buy_price_pence * units_per_sale,
                     "sell_price_pence": result.sell_price_pence, "net_profit_pence": result.net_profit_pence,
                     "roi": result.roi, "sales_rank": stage2.sales_rank, "fba_offer_count": stage2.fba_offer_count,
+                    # Velocity is the single biggest reject reason across every
+                    # scan run so far, and until 2026-09-09 the number behind it
+                    # survived only as prose inside verdict_reason — so "which
+                    # products actually sell" needed re-querying Keepa for data
+                    # already paid for. Source matters as much as the figure:
+                    # keepa_confirmed is a real monthlySold badge, rank_drop_proxy
+                    # is a noisy stand-in the gate trusts far less.
+                    "est_monthly_sales": stage2.est_monthly_sales,
+                    "est_monthly_sales_source": stage2.est_monthly_sales_source,
                     "verdict": result.verdict.value, "verdict_reason": result.verdict_reason, "flags": flags,
                 }
                 ckpt.write(json.dumps(entry) + "\n")
@@ -451,3 +499,16 @@ def _run_scan(source_name: str, rows: list[FeedRow]) -> None:
             f.write(f"  {k}: {v}\n")
 
     print(f"[SCAN:{source_name}] wrote {len(passes)} candidates to {out_path}")
+
+    # The checkpoints are the resume mechanism; this is the queryable record.
+    # Best-effort on purpose: a scan that found deals must not report failure
+    # because the database was unreachable. The .jsonl files still hold
+    # everything and tools/backfill_scan_results.py can replay them.
+    try:
+        stage1_records = list(_load_checkpoint(stage1_checkpoint_path, "ean").values())
+        written, _ = scan_store.persist_scan(db, source_name, stage1_records, results)
+        print(f"[SCAN:{source_name}] persisted {written} rows to supplier_scan_results")
+    except Exception as e:   # noqa: BLE001 -- reporting only, the scan itself succeeded
+        print(f"[SCAN:{source_name}] WARNING: could not persist to DB "
+              f"({type(e).__name__}: {e}); checkpoints intact, "
+              f"replay with tools/backfill_scan_results.py")
