@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Brightside Commerce Ltd — a UK retail business selling on Amazon UK and eBay UK. Trade and stockist enquiries welcome.">
+<meta name="theme-color" content="#1a2e4d">
+<title>Brightside Commerce Ltd</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=Source+Sans+3:wght@400;600&display=swap">
+
+<style>
+  :root {
+    --paper:      #F4F5F7;
+    --surface:    #FFFFFF;
+    --ink:        #17212A;
+    --ink-soft:   #4C5A66;
+    --ink-faint:  #6B7682;
+    --rule:       #DFE2E6;
+    --rule-soft:  #EBEDF0;
+    --accent:     #1A2E4D;
+    --accent-ink: #0F1F38;
+    --on-accent:  #FFFFFF;
+    --mark:       #EBA941;
+
+    --step-0: 1rem;
+    --step-1: 1.125rem;
+    --step-2: 1.45rem;
+    --step-3: 2rem;
+    --step-4: 2.85rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #0F1115;
+      --surface:    #171A21;
+      --ink:        #E8EAEA;
+      --ink-soft:   #A7B2BB;
+      --ink-faint:  #8590A0;
+      --rule:       #2A2F3A;
+      --rule-soft:  #21252E;
+      --accent:     #60A5FA;
+      --accent-ink: #93C5FD;
+      --on-accent:  #0F1115;
+      --mark:       #EBA941;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:      #0F1115;
+    --surface:    #171A21;
+    --ink:        #E8EAEA;
+    --ink-soft:   #A7B2BB;
+    --ink-faint:  #8590A0;
+    --rule:       #2A2F3A;
+    --rule-soft:  #21252E;
+    --accent:     #60A5FA;
+    --accent-ink: #93C5FD;
+    --on-accent:  #0F1115;
+    --mark:       #EBA941;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Source Sans 3", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: var(--step-0);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 47rem;
+    margin-inline: auto;
+    padding-inline: 20px;
+    padding-block: 0 4rem;
+  }
+
+  h1, h2, h3 {
+    font-family: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  /* ---- masthead ---- */
+  header {
+    border-bottom: 2px solid var(--ink);
+    padding-block: 3.25rem 1.5rem;
+    margin-bottom: 2.75rem;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .brand-badge {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 0.6rem;
+    background: #1A2E4D;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  h1 {
+    font-size: var(--step-4);
+    font-weight: 700;
+    line-height: 1.02;
+    letter-spacing: -0.021em;
+  }
+
+  h1 .ltd {
+    color: var(--ink-faint);
+    font-weight: 600;
+  }
+
+  .standfirst {
+    font-size: var(--step-1);
+    color: var(--ink-soft);
+    margin: 1rem 0 0;
+    max-width: 34rem;
+  }
+
+  /* ---- sections ---- */
+  section { margin-bottom: 3rem; }
+
+  h2 {
+    font-size: var(--step-2);
+    font-weight: 600;
+    letter-spacing: -0.012em;
+    margin-bottom: 0.9rem;
+  }
+
+  h3.sub {
+    font-size: var(--step-0);
+    font-weight: 600;
+    margin: 1.75rem 0 0;
+  }
+
+  p { margin: 0 0 1rem; max-width: 36rem; }
+  p:last-child { margin-bottom: 0; }
+
+  /* ---- channels ---- */
+  .channels {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin-top: 1.25rem;
+  }
+
+  .channel {
+    background: var(--surface);
+    padding: 1.35rem 1.4rem;
+  }
+
+  .channel h3 {
+    font-size: var(--step-0);
+    font-weight: 600;
+    margin-bottom: 0.3rem;
+  }
+
+  .channel p {
+    font-size: 0.925rem;
+    color: var(--ink-soft);
+    margin: 0;
+  }
+
+  .channel a {
+    color: var(--accent);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+  }
+
+  .channel a:hover { color: var(--accent-ink); }
+
+  /* ---- approvals figure ---- */
+  .approvals {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    flex-wrap: wrap;
+    border-left: 4px solid var(--mark);
+    padding: 0.4rem 0 0.4rem 1.25rem;
+    margin: 1.5rem 0;
+  }
+
+  .approvals .fig {
+    font-family: "Space Grotesk", sans-serif;
+    font-size: var(--step-3);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+
+  .approvals .cap {
+    color: var(--ink-soft);
+    font-size: 0.95rem;
+    max-width: 24rem;
+  }
+
+  /* ---- lists ---- */
+  ul.asks {
+    list-style: none;
+    padding: 0;
+    margin: 0.9rem 0 0;
+    display: grid;
+    gap: 0.8rem;
+    max-width: 36rem;
+  }
+
+  ul.asks li {
+    display: grid;
+    grid-template-columns: 1.5rem 1fr;
+    gap: 0.4rem;
+    align-items: start;
+    color: var(--ink-soft);
+  }
+
+  ul.asks .tick {
+    color: var(--accent);
+    font-weight: 700;
+    line-height: 1.5;
+  }
+
+  /* ---- company record ---- */
+  .record {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    padding: 1.6rem 1.5rem;
+    margin-top: 1.25rem;
+  }
+
+  dl {
+    margin: 0;
+    display: grid;
+    grid-template-columns: minmax(9.5rem, auto) 1fr;
+    gap: 0.7rem 1.5rem;
+    font-size: 0.95rem;
+  }
+
+  dt {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    padding-top: 0.22rem;
+  }
+
+  dd {
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  dd a {
+    color: var(--accent);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+  }
+
+  dd a:hover { color: var(--accent-ink); }
+
+  a:focus-visible,
+  .cta:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  /* ---- contact ---- */
+  .cta {
+    display: inline-block;
+    font-family: "Space Grotesk", sans-serif;
+    font-weight: 600;
+    font-size: var(--step-1);
+    color: var(--on-accent);
+    background: var(--accent);
+    padding: 0.7rem 1.35rem;
+    border-radius: 0.5rem;
+    text-decoration: none;
+    margin-top: 0.4rem;
+    overflow-wrap: anywhere;
+  }
+
+  .cta:hover { background: var(--accent-ink); }
+
+  .phone {
+    margin-top: 0.95rem;
+    color: var(--ink-soft);
+    font-size: 0.95rem;
+  }
+
+  .phone a {
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+  }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 1.25rem;
+    color: var(--ink-faint);
+    font-size: 0.85rem;
+  }
+
+  footer a {
+    color: var(--ink-faint);
+    text-underline-offset: 2px;
+  }
+
+  footer a:hover { color: var(--ink-soft); }
+
+  @media (max-width: 30rem) {
+    :root { --step-4: 2.1rem; --step-3: 1.7rem; }
+    dl { grid-template-columns: 1fr; gap: 0.15rem 0; }
+    dt { padding-top: 0.6rem; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <span class="brand-badge" aria-hidden="true">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+          <path d="M3 21H21" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
+          <path d="M6 21A6 6 0 0 1 18 21Z" fill="#EBA941"/>
+          <path d="M12 8V5" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
+          <path d="M6.5 11L4.5 9" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
+          <path d="M17.5 11L19.5 9" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span class="eyebrow">Supplier information</span>
+    </div>
+    <h1>Brightside Commerce <span class="ltd">Ltd</span></h1>
+    <p class="standfirst">
+      A UK retail business selling to consumers on Amazon UK and eBay UK.
+      We are looking to represent more brands on those channels.
+    </p>
+  </header>
+
+  <section>
+    <span class="eyebrow">About us</span>
+    <h2>Who we are</h2>
+    <p>
+      Brightside Commerce is a small, independent UK retailer based in Bothwell,
+      Scotland. We buy branded products on trade terms and sell them to
+      consumers through our own seller accounts on Amazon UK and eBay UK.
+    </p>
+    <p>
+      We are a new company and we are upfront about that. What we bring is
+      existing marketplace access, accounts already approved in many brands and
+      categories, and a straightforward way of working: one contact, clear
+      terms, and no surprises about where your products are sold.
+    </p>
+  </section>
+
+  <section>
+    <span class="eyebrow">Channels</span>
+    <h2>Where we sell</h2>
+    <p>
+      We operate as a third-party seller on the UK's two largest consumer
+      marketplaces: Amazon UK, fulfilled through FBA, and eBay UK, which we
+      fulfil ourselves.
+    </p>
+    <div class="channels">
+      <div class="channel">
+        <h3>Amazon UK</h3>
+        <p>Professional seller account, fulfilled by Amazon (FBA).</p>
+      </div>
+      <div class="channel">
+        <h3>eBay UK</h3>
+        <p>Merchant-fulfilled. <a href="https://www.ebay.co.uk/usr/brightsidecommerce" target="_blank" rel="noopener">View our store &rarr;</a></p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Brand approvals</span>
+    <h2>Approved to list</h2>
+    <!-- TODO(sign-off): confirm the 149 figure and the category list below before deploy. -->
+    <div class="approvals">
+      <span class="fig">149</span>
+      <span class="cap">
+        brands for which Brightside holds approved-seller status on Amazon UK,
+        across homeware, DIY, automotive, health &amp; beauty and toys.
+      </span>
+    </div>
+    <p>
+      Amazon requires category or brand approval before a seller may list many
+      products. Where that approval is already in place, a new line can go live
+      without an application delay.
+    </p>
+  </section>
+
+  <section>
+    <span class="eyebrow">Trade</span>
+    <h2>Working with brands</h2>
+    <p>
+      We buy on standard trade terms and sell at the brand's recommended
+      retail price. We are a young company and deliberately start small &mdash;
+      an opening order, sell-through data, then a conversation about growing it.
+    </p>
+
+    <!-- TODO(sign-off): these five commitments were drafted on Jac's behalf. Confirm each
+         one is something Brightside will actually stand behind, then delete this comment. -->
+    <h3 class="sub">What you can expect from us</h3>
+    <ul class="asks">
+      <li><span class="tick">&#10003;</span><span>Your products sold at your recommended retail price, not undercut</span></li>
+      <li><span class="tick">&#10003;</span><span>Listings that follow your product names, descriptions and images</span></li>
+      <li><span class="tick">&#10003;</span><span>Customer service, returns and marketplace fees handled by us</span></li>
+      <li><span class="tick">&#10003;</span><span>Sell-through feedback after the opening order</span></li>
+      <li><span class="tick">&#10003;</span><span>Clarity on exactly which channels we sell on, before we order</span></li>
+    </ul>
+
+    <h3 class="sub">What we would like to receive</h3>
+    <ul class="asks">
+      <li><span class="tick">&rarr;</span><span>Trade price list and minimum order quantity</span></li>
+      <li><span class="tick">&rarr;</span><span>Written confirmation of your policy on marketplace resale</span></li>
+      <li><span class="tick">&rarr;</span><span>Any pricing, listing or territory conditions you apply to resellers</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <span class="eyebrow">Company record</span>
+    <h2>Registered details</h2>
+    <div class="record">
+      <dl>
+        <dt>Registered name</dt>
+        <dd>BRIGHTSIDECOMMERCE LTD</dd>
+
+        <dt>Company number</dt>
+        <dd>SC897269</dd>
+
+        <dt>Jurisdiction</dt>
+        <dd>Scotland</dd>
+
+        <dt>Incorporated</dt>
+        <dd>28 July 2026</dd>
+
+        <dt>Based in</dt>
+        <dd>Bothwell, Scotland</dd>
+
+        <dt>Trade contact</dt>
+        <dd>Jac McLaughlin &middot; <a href="mailto:sales@brightsidecommerce.co.uk">sales@brightsidecommerce.co.uk</a> &middot; 07940 849821</dd>
+
+        <dt>Public record</dt>
+        <dd><a href="https://find-and-update.company-information.service.gov.uk/company/SC897269" target="_blank" rel="noopener">Companies House &rarr;</a></dd>
+      </dl>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Contact</span>
+    <h2>Trade enquiries</h2>
+    <p>
+      Wholesale and stockist enquiries are welcome. We will tell you exactly
+      which channels we sell on before placing any order.
+    </p>
+    <a class="cta" href="mailto:sales@brightsidecommerce.co.uk?subject=Trade%20enquiry">sales@brightsidecommerce.co.uk</a>
+    <p class="phone">or call <a href="tel:+447940849821">07940 849821</a></p>
+  </section>
+
+  <footer>
+    BRIGHTSIDECOMMERCE LTD &middot; Registered in Scotland, company number SC897269.
+    Registered office address available on the Companies House public register.
+    <br><a href="/">brightsidecommerce.co.uk</a>
+  </footer>
+
+</div>
+</body>
+</html>

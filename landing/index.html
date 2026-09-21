@@ -1,41 +1,50 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-GB">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Brightside Commerce Ltd — a UK retail business selling branded products to consumers on Amazon UK and eBay UK. Trade and stockist enquiries welcome.">
 <meta name="theme-color" content="#1a2e4d">
-<title>Brightside</title>
+<title>Brightside Commerce Ltd</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
 <link rel="icon" type="image/png" sizes="48x48" href="favicon-48.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Source+Sans+3:wght@400;600&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg: #f7f8fa; --panel: #ffffff; --border: #e3e6ea; --text: #1a1d21;
-    --muted: #6b7280; --accent: #1a2e4d; --accent-text: #ffffff;
+    --muted: #6b7280; --accent: #1a2e4d; --accent-hover: #0f1f38;
+    --accent-text: #ffffff; --mark: #EBA941;
   }
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
       --bg: #0f1115; --panel: #171a21; --border: #2a2f3a; --text: #e6e8eb;
-      --muted: #9aa3af; --accent: #60a5fa; --accent-text: #0f1115;
+      --muted: #9aa3af; --accent: #60a5fa; --accent-hover: #93c5fd;
+      --accent-text: #0f1115; --mark: #EBA941;
     }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1115; --panel: #171a21; --border: #2a2f3a; --text: #e6e8eb;
+    --muted: #9aa3af; --accent: #60a5fa; --accent-hover: #93c5fd;
+    --accent-text: #0f1115; --mark: #EBA941;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
     background: var(--bg); color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    padding: 24px;
+    font-family: "Source Sans 3", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6; padding: 24px;
+    -webkit-font-smoothing: antialiased;
   }
   .card {
     width: 100%; max-width: 480px; background: var(--panel); border: 1px solid var(--border);
     border-radius: 14px; padding: 40px 32px; box-shadow: 0 1px 2px rgba(0,0,0,0.04);
     text-align: center;
   }
-  .logo { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 0 0 12px; }
+  .logo { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 0 0 14px; }
   .logo-badge {
     width: 36px; height: 36px; border-radius: 9px; background: #1a2e4d;
     display: flex; align-items: center; justify-content: center; flex-shrink: 0;
@@ -44,20 +53,29 @@
     font-family: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     font-size: 26px; font-weight: 700; margin: 0; letter-spacing: -0.01em;
   }
-  p.tagline { color: var(--muted); font-size: 15px; line-height: 1.5; margin: 0 0 28px; }
+  h1 .ltd { color: var(--muted); font-weight: 600; }
+  p.tagline { color: var(--muted); font-size: 15px; margin: 0 0 26px; }
   a.cta {
     display: inline-block; background: var(--accent); color: var(--accent-text); text-decoration: none;
+    font-family: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-size: 15px; font-weight: 600; padding: 12px 28px; border-radius: 8px;
   }
-  a.cta:hover { opacity: 0.9; }
-  .contact { color: var(--muted); font-size: 13px; margin: 28px 0 0; }
-  .contact p { margin: 4px 0; }
+  a.cta:hover { background: var(--accent-hover); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .sub-link { font-size: 14px; margin: 16px 0 0; }
+  .sub-link a { color: var(--accent); text-underline-offset: 2px; }
+  .contact {
+    color: var(--muted); font-size: 13px; margin: 28px 0 0;
+    border-top: 1px solid var(--border); padding-top: 20px;
+  }
+  .contact p { margin: 5px 0; }
   .contact a { color: var(--muted); }
   .ebay-link { display: inline-flex; align-items: center; gap: 5px; vertical-align: middle; }
   .ebay-logo {
     height: 14px; width: auto; display: block;
     background: #ffffff; border-radius: 3px; padding: 3px 6px;
   }
+  .registered { margin-top: 14px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -72,16 +90,23 @@
         <path d="M17.5 11L19.5 9" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
       </svg>
     </span>
-    <h1>Brightside</h1>
+    <h1>Brightside Commerce <span class="ltd">Ltd</span></h1>
   </div>
   <p class="tagline">
-    Brightside sources retail clearance and deal listings and screens each one against
-    live Amazon marketplace data to identify resale opportunities worth pursuing.
+    A UK retail business. We buy branded products on trade terms and sell them
+    to consumers on Amazon UK and eBay UK.
   </p>
-  <a class="cta" href="https://app.brightsidecommerce.co.uk">Open Scanner</a>
+  <a class="cta" href="/trade">Supplier information</a>
+  <p class="sub-link">
+    <a href="https://www.ebay.co.uk/usr/brightsidecommerce" target="_blank" rel="noopener">Visit our eBay store &rarr;</a>
+  </p>
   <div class="contact">
+    <p>Trade enquiries: <a href="mailto:sales@brightsidecommerce.co.uk?subject=Trade%20enquiry">sales@brightsidecommerce.co.uk</a></p>
     <p>Also selling on <a href="https://www.ebay.co.uk/usr/brightsidecommerce" target="_blank" rel="noopener" class="ebay-link"><img src="ebay-logo.png" alt="eBay" class="ebay-logo"> as Brightside Commerce</a>.</p>
-    <p>Contact: <a href="mailto:sales@brightsidecommerce.co.uk">sales@brightsidecommerce.co.uk</a></p>
+    <p class="registered">
+      BRIGHTSIDECOMMERCE LTD &middot; Registered in Scotland, company number
+      <a href="https://find-and-update.company-information.service.gov.uk/company/SC897269" target="_blank" rel="noopener">SC897269</a>.
+    </p>
   </div>
 </div>
 </body>
