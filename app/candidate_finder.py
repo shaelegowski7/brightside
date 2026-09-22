@@ -114,8 +114,32 @@ def _build_finder_params(finder_cfg: dict, cfg: DecisionConfig) -> dict:
                                       (confirmed: every Bullyland item
                                       checked on 2026-08-29 looked like this).
       current_SALES_lte            -- category_rank_thresholds
-      buyBoxIsAmazon=False         -- the amazon_on_listing hard-reject
+      buyBoxIsAmazon=False         -- a cheap first pass at the
+                                      amazon_on_listing hard-reject, NOT
+                                      equivalent to it: buyBoxIsAmazon is
+                                      only the instantaneous buy-box winner
+                                      and understates real Amazon competition
+                                      the same way keepa_client.py's module
+                                      docstring already flags for stage1/2 --
+                                      Amazon can hold a live offer without
+                                      currently owning the box. Real
+                                      enforcement is below in find_candidates,
+                                      against stage2's amazon_on_listing
+                                      (confirmed live 2026-08-31: 19 of the
+                                      top 30 lowest-discount candidates from
+                                      the 2026-08-29 run had buyBoxIsAmazon
+                                      False at finder time but amazon_on_listing
+                                      True on refresh -- score_deal would have
+                                      hard-rejected every one of them).
       buyBoxEligibleOfferCountsNewFBA_lte -- thresholds.max_fba_offers
+      buyBoxEligibleOfferCountsNewFBA_gte -- candidate_finder.min_fba_offers,
+                                      NOT a decision-engine gate -- see
+                                      config.yaml's comment on min_fba_offers.
+                                      A sole-source (1-offer) ASIN is exactly
+                                      the case with no provable supply chain
+                                      to join, so the finder is deliberately
+                                      stricter here than engine.py's own
+                                      max_fba_offers ceiling.
       monthlySold_gte              -- velocity.min_monthly_sales
       current_BUY_BOX_SHIPPING_gte -- min_buybox_pence, see module docstring
       productType=[0]              -- physical goods only
@@ -125,6 +149,7 @@ def _build_finder_params(finder_cfg: dict, cfg: DecisionConfig) -> dict:
         "current_SALES_lte": finder_cfg["max_sales_rank"],
         "buyBoxIsAmazon": False,
         "buyBoxEligibleOfferCountsNewFBA_lte": cfg.max_fba_offers,
+        "buyBoxEligibleOfferCountsNewFBA_gte": finder_cfg.get("min_fba_offers", 1),
         "monthlySold_gte": int(cfg.velocity_min_monthly_sales),
         "current_BUY_BOX_SHIPPING_gte": finder_cfg["min_buybox_pence"],
         "productType": [0],
@@ -169,6 +194,16 @@ def find_candidates(
     for asin in asins:
         stage2 = stage2_by_asin.get(asin)
         if stage2 is None or not stage2.buybox_price_pence:
+            continue
+        if stage2.amazon_on_listing:
+            continue
+        # Same lesson as amazon_on_listing above: the finder query's
+        # buyBoxEligibleOfferCountsNewFBA_gte is a snapshot at query time,
+        # not authoritative -- confirmed live 2026-08-31, competition can
+        # drop between the finder call and this stage2 refresh (4 of 9
+        # candidates that cleared min_fba_offers=2 at the finder came back
+        # fba_offer_count==1 here). Re-check against the fresh data.
+        if stage2.fba_offer_count < finder_cfg.get("min_fba_offers", 1):
             continue
         if stage2.title and _EXCLUDED_TITLE_RE.search(stage2.title):
             continue

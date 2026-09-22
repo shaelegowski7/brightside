@@ -71,3 +71,56 @@ def get_config() -> dict:
     path = Path(os.environ.get("CONFIG_PATH", DEFAULT_CONFIG_PATH))
     with path.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+@dataclass(frozen=True)
+class EbaySettings:
+    """eBay Sell API credentials -- deliberately NOT part of Settings.
+
+    Settings hard-requires DATABASE_URL/SUPABASE_* because the scanner
+    cannot run without them. The eBay listing tools are a separate concern
+    that must be usable on a machine where none of that is configured --
+    the whole point of tools/ebay_consent.py is to be runnable *before*
+    anything else is set up. Folding these into Settings meant `ebay_consent
+    check` died on a missing SUPABASE_URL, which is a nonsense failure for
+    a tool whose job is to tell you what is missing.
+
+    Everything defaults empty; app/ebay_client.py's is_configured() is the
+    single on/off switch, so an unconfigured deploy simply never calls eBay.
+    """
+
+    # The one field that is not a secret: which eBay environment to talk to.
+    # "sandbox" (default, safe) or "production". The two have entirely
+    # separate keysets, RuNames, refresh tokens and business policies, so
+    # switching env means swapping every other value here too.
+    env: str = "sandbox"
+    client_id: str = ""
+    client_secret: str = ""
+    # NOT a URL -- eBay's OAuth flow takes an "RuName" (Redirect URL name)
+    # in the redirect_uri parameter. Passing a real https:// URL there is
+    # the most common cause of a failed consent step.
+    ru_name: str = ""
+    refresh_token: str = ""
+    marketplace_id: str = "EBAY_GB"
+    # Set once via tools/ebay_consent.py; offers cannot be published
+    # without all four (see docs/EBAY_SETUP.md step 5).
+    merchant_location_key: str = ""
+    fulfillment_policy_id: str = ""
+    payment_policy_id: str = ""
+    return_policy_id: str = ""
+
+
+@lru_cache
+def get_ebay_settings() -> EbaySettings:
+    return EbaySettings(
+        env=os.environ.get("EBAY_ENV", "sandbox"),
+        client_id=os.environ.get("EBAY_CLIENT_ID", ""),
+        client_secret=os.environ.get("EBAY_CLIENT_SECRET", ""),
+        ru_name=os.environ.get("EBAY_RU_NAME", ""),
+        refresh_token=os.environ.get("EBAY_REFRESH_TOKEN", ""),
+        marketplace_id=os.environ.get("EBAY_MARKETPLACE_ID", "EBAY_GB"),
+        merchant_location_key=os.environ.get("EBAY_MERCHANT_LOCATION_KEY", ""),
+        fulfillment_policy_id=os.environ.get("EBAY_FULFILLMENT_POLICY_ID", ""),
+        payment_policy_id=os.environ.get("EBAY_PAYMENT_POLICY_ID", ""),
+        return_policy_id=os.environ.get("EBAY_RETURN_POLICY_ID", ""),
+    )
