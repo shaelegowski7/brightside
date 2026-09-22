@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 .env
+.env.*.backup
+.env.*.bak
 .pytest_cache/
 *.egg-info/
 .DS_Store
