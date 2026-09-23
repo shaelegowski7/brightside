@@ -32,11 +32,14 @@ free. Used to avoid the SP-API getMyFeesEstimate cost/eligibility bar
 (Pro-seller developer registration + ongoing fee) for this one component;
 referral fee and gating still aren't SP-API-backed — see pricing/fees.py.
 """
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import keepa
+import requests
 from sqlalchemy.orm import Session
+from urllib3.exceptions import ProtocolError
 
 from . import models
 from .config import get_config, get_settings
@@ -44,6 +47,41 @@ from .decision.engine import DecisionConfig
 from .pricing.fees import FeeProvider
 
 KEEPA_DOMAIN = "GB"   # Keepa's domain code for the UK marketplace — NOT "UK"
+
+_QUERY_RETRIES = 3
+_QUERY_RETRY_DELAY_S = 10
+
+
+def _query_with_retry(client, *args, **kwargs):
+    """keepa's underlying requests session has dropped the connection
+    ("Remote end closed connection without response") after sitting idle
+    through a long token-wait — observed twice in a row during a real
+    multi-hour scan (ancientwisdom, 2026-09-05), each time killing the
+    whole process and needing a manual relaunch. A few bare retries are
+    enough since it's a transient connection issue, not a bad request.
+
+    Catching only ConnectionError was not enough: the novanex scan
+    (2026-09-06) still died twice, both times immediately after a long
+    token-wait, with the runner reporting a bare exit 1. A socket that
+    dies mid-response surfaces as ChunkedEncodingError or a raw urllib3
+    ProtocolError rather than ConnectionError, and a stale connection
+    that accepts the request then stalls raises Timeout — none of which
+    the original clause caught. All of them mean the same thing here (the
+    idle socket is gone, retry on a fresh one), so match the broad
+    RequestException and let genuinely bad requests fail on the last
+    attempt like before. Backoff is linear rather than flat so a Keepa-
+    side blip gets progressively more room instead of three fast retries.
+    """
+    for attempt in range(_QUERY_RETRIES):
+        try:
+            return client.query(*args, **kwargs)
+        except (requests.exceptions.RequestException, ProtocolError) as e:
+            if attempt == _QUERY_RETRIES - 1:
+                raise
+            delay = _QUERY_RETRY_DELAY_S * (attempt + 1)
+            print(f"[KEEPA] query failed ({type(e).__name__}: {e}), "
+                  f"retry {attempt + 1}/{_QUERY_RETRIES - 1} in {delay}s")
+            time.sleep(delay)
 
 # Product.CsvType indices into stats.current / stats.avg90 (etc), read from
 # the installed keepa package's CsvType enum (declaration order == index).
@@ -213,13 +251,15 @@ class Stage2Result:
     referral_fee_percentage: float | None   # Keepa's own referral %, percentage points (13.0 == 13%); None if unavailable
     leaf_category_id: int | None   # deepest categoryTree catId with its own salesRanks entry -- see _leaf_category
     leaf_category_rank: int | None   # most recent rank within leaf_category_id, for the velocity gate's percentile leg
+    est_monthly_sales_source: str | None = None   # "keepa_confirmed" (real monthlySold badge) or "rank_drop_proxy" (noisy stand-in) — see velocity gate in decision/engine.py, which trusts these very differently. Defaulted so existing keyword-constructed Stage2Result call sites (tests) don't need updating.
 
 
 def stage1_screen(db: Session, codes: list[str], is_ean: bool) -> dict[str, Stage1Result]:
     """`codes` are EANs when is_ean else ASINs. Batch up to 100 per call."""
     client = _get_client()
     tokens_before = client.tokens_left
-    products = client.query(
+    products = _query_with_retry(
+        client,
         codes,
         domain=KEEPA_DOMAIN,
         stats=90,
@@ -300,6 +340,14 @@ def stage1_screen_passes(result: Stage1Result, buy_price_pence: int, cfg: Decisi
     if result.est_sell_price_pence is None:
         # No price history at all to screen on — let stage 2 make the real call.
         return True, None
+    # Optional coarse floor. Off by default (0) — the net-profit check below
+    # is strictly better, because it uses this item's real fees and real buy
+    # price instead of one number for every catalogue. Kept for the case
+    # where you already know a whole list is beneath consideration and want
+    # to skip it without reasoning per row.
+    if result.est_sell_price_pence < cfg.min_sell_price_pence:
+        return False, (f"sell price {result.est_sell_price_pence}p below "
+                       f"{cfg.min_sell_price_pence}p floor")
 
     fee_input = fees.get_fees(result.category or "", result.est_sell_price_pence, dims=None)
     fee_vat_mult = 1.0 if cfg.vat_registered else 1.20
@@ -308,6 +356,16 @@ def stage1_screen_passes(result: Stage1Result, buy_price_pence: int, cfg: Decisi
         result.est_sell_price_pence - total_fees - fee_input.monthly_storage_fee_pence
         - cfg.inbound_shipping_pence - buy_price_pence
     )
+    # Absolute profit, not just ROI. These are different tests and the cheap
+    # end of a catalogue only fails the first: a lipstick bought at £1.25 and
+    # sold at £6 shows a fat ROI on a profit of pennies, and £3 of that is
+    # eaten by fees whatever the ROI says. Stage 2 has always rejected these
+    # on min_net_profit — checking it here too is what stops the lookup being
+    # spent to learn it. Both numbers here are best-case (no offer
+    # competition), so anything failing this cannot pass stage 2 either.
+    if optimistic_net_profit < cfg.min_net_profit_pence:
+        return False, (f"optimistic net profit {optimistic_net_profit}p < "
+                       f"{cfg.min_net_profit_pence}p on best-case assumptions")
     optimistic_roi = optimistic_net_profit / buy_price_pence
     if optimistic_roi < cfg.min_roi:
         return False, f"optimistic roi {optimistic_roi:.1%} < {cfg.min_roi:.0%} on best-case assumptions"
@@ -318,7 +376,8 @@ def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
     """Only call for stage-1 survivors. Batch up to 100 per call."""
     client = _get_client()
     tokens_before = client.tokens_left
-    products = client.query(
+    products = _query_with_retry(
+        client,
         asins,
         domain=KEEPA_DOMAIN,
         stats=90,
@@ -348,7 +407,15 @@ def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
 
         monthly_sold = product.get("monthlySold")
         rank_drops_30 = stats.get("salesRankDrops30")
-        est_monthly_sales = float(monthly_sold) if monthly_sold else (float(rank_drops_30) if rank_drops_30 else None)
+        if monthly_sold:
+            est_monthly_sales = float(monthly_sold)
+            est_monthly_sales_source = "keepa_confirmed"
+        elif rank_drops_30:
+            est_monthly_sales = float(rank_drops_30)
+            est_monthly_sales_source = "rank_drop_proxy"
+        else:
+            est_monthly_sales = None
+            est_monthly_sales_source = None
 
         weight_g = product.get("packageWeight")
         dims_mm = [d for d in (product.get(k) for k in ("packageHeight", "packageLength", "packageWidth")) if d]
@@ -364,6 +431,7 @@ def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
             fba_offer_count=int(fba_offer_count) if fba_offer_count is not None else 0,
             lowest_fba_offer_pence=int(lowest_fba) if lowest_fba is not None else None,
             est_monthly_sales=est_monthly_sales,
+            est_monthly_sales_source=est_monthly_sales_source,
             buybox_avg_90d_pence=int(buybox_avg_90d) if buybox_avg_90d is not None else None,
             rank_history_days=_rank_history_days(product),
             hazmat=bool(product.get("hazardousMaterials")),

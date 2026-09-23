@@ -222,12 +222,28 @@ class FeeEstimateCache(Base):
 class GatingCache(Base):
     """SP-API getListingsRestrictions cache (Phase 2, dormant until
     spapi_client.is_configured()) -- spec: "Cache gating results per ASIN
-    for 7 days." """
+    for 7 days."
+
+    `gated` alone is not enough to make a buying decision. SP-API's
+    reasonCode distinguishes APPROVAL_REQUIRED (there is an application
+    path -- send a qualifying trade invoice and you are in) from
+    NOT_ELIGIBLE (no path exists at all). For wholesale sourcing those are
+    opposite answers: the first is a paperwork step you can plan an order
+    around, the second kills the SKU. `reason_code` and `approval_url`
+    keep that distinction; `gated` stays for existing callers.
+    """
 
     __tablename__ = "spapi_gating_cache"
 
     asin = Column(String, primary_key=True)
     gated = Column(Boolean, nullable=False)
+    # "APPROVAL_REQUIRED" | "NOT_ELIGIBLE" | "ASIN_NOT_FOUND" | None when ungated.
+    # Multiple codes on one ASIN are stored comma-separated, sorted.
+    reason_code = Column(String, nullable=True)
+    # Seller Central deep link Amazon returns with an APPROVAL_REQUIRED
+    # restriction -- the actual "apply here" URL, worth keeping so a gated
+    # candidate is one click from an application.
+    approval_url = Column(String, nullable=True)
     fetched_at = Column(DateTime(timezone=True), default=utcnow)
 
 
@@ -317,3 +333,61 @@ class EbayListing(Base):
     last_error = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class SupplierScanResult(Base):
+    """Per-product outcome of a catalogue-first scan (tools/wholesale_scan.py).
+
+    Until 2026-09-09 these scans wrote nothing to the database: 15,416
+    stage-1 lookups and 2,578 full scorings across six suppliers lived only
+    in loose {supplier}_stage*_checkpoint.jsonl files in the repo root,
+    untracked by git and one `git clean` from gone. That made the obvious
+    cross-supplier questions unanswerable without a one-off script each
+    time -- "everything that cleared £3 net", "did this supplier's re-quote
+    beat their last one" -- despite the Keepa tokens for all of it having
+    already been spent.
+
+    One row per (supplier, ean). The checkpoints stay as they are: they are
+    the resume mechanism and are written mid-batch, whereas this is the
+    queryable record written once a product has an outcome.
+
+    A product that never reached stage 2 is still stored, with stage=1 and
+    a null verdict -- "matched an ASIN but was screened out cheaply" and
+    "was never seen" are different facts and both worth keeping. Prices are
+    overwritten on re-scan since a supplier's quote and Amazon's buy box
+    both move; first_seen/last_seen bound when the observation held.
+    """
+
+    __tablename__ = "supplier_scan_results"
+
+    supplier = Column(String, primary_key=True)
+    ean = Column(String, primary_key=True)
+
+    asin = Column(String, nullable=True, index=True)
+    brand = Column(String, nullable=True)
+    name = Column(String, nullable=True)          # supplier's own description
+    title = Column(String, nullable=True)         # Amazon's title
+
+    stage = Column(Integer, nullable=False)       # 1 = screened out / no match, 2 = fully scored
+    buy_price_pence = Column(Integer, nullable=True)
+    units_per_sale = Column(Integer, nullable=True)
+    bundle_cost_pence = Column(Integer, nullable=True)
+    sell_price_pence = Column(Integer, nullable=True)
+    net_profit_pence = Column(Integer, nullable=True)
+    roi = Column(Float, nullable=True)
+    sales_rank = Column(Integer, nullable=True)
+    fba_offer_count = Column(Integer, nullable=True)
+    # Velocity is the biggest single reject reason across every scan so far.
+    # Source is kept alongside the number because they mean different things:
+    # "keepa_confirmed" is Keepa's real monthlySold badge (bucketed, lowest
+    # bucket 50); "rank_drop_proxy" is a noisy stand-in from 30-day rank drops.
+    est_monthly_sales = Column(Float, nullable=True)
+    est_monthly_sales_source = Column(String, nullable=True)
+
+    verdict = Column(String, nullable=True)       # PASS / PASS_WITH_FLAGS / REJECT
+    verdict_reason = Column(String, nullable=True)
+    flags = Column(JSON, nullable=True)
+    note = Column(String, nullable=True)
+
+    first_seen = Column(DateTime(timezone=True), default=utcnow)
+    last_seen = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

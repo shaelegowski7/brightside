@@ -72,11 +72,13 @@ def cmd_url() -> int:
     _print_header("Open this in a browser, sign in, click 'I agree'")
     print(ebay_client.consent_url())
     print(
-        "\n*** Sign in as the SELLING account (Brightside Commerce), not a personal\n"
-        "    one. The token binds to whoever clicks Agree -- NOT to the developer\n"
-        "    account -- so consenting as the wrong user silently sends every\n"
-        "    listing to that user's shop. The URL sends prompt=login to force a\n"
-        "    fresh sign-in, but check the account name on the page anyway.\n"
+        "\n*** Sign in as whichever eBay account should own the listings this\n"
+        "    run creates -- Brightside Commerce, a personal account, whatever\n"
+        "    you intend right now. The token binds to whoever clicks Agree,\n"
+        "    NOT to the developer account, so consenting as the wrong user\n"
+        "    silently sends every listing to that user's shop. The URL sends\n"
+        "    prompt=login to force a fresh sign-in, but check the account\n"
+        "    name on the page anyway before clicking Agree.\n"
         "\neBay then redirects to your RuName's accept URL with ?code=... in the\n"
         "query string. Copy that code value and run:\n\n"
         '    python -m tools.ebay_consent exchange "<code>"\n\n'

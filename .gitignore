@@ -14,9 +14,10 @@ pwa/.env
 .vercel
 
 # Scratch output from tools/wholesale_scan.py and the Keepa/sourcing tooling —
-# regenerable by re-running against the supplier feeds, not source. See
-# wholesale_scan.py's own docstring: "Delete the checkpoint files for a
-# genuinely fresh run."
+# regenerable by re-running against the supplier feeds, not source. Since
+# 2026-09-09 every scanned product is also persisted to supplier_scan_results
+# (see app/models.py); the .jsonl checkpoints remain the resume mechanism and
+# tools/backfill_scan_results.py can replay them.
 *_stage1_checkpoint.jsonl
 *_stage2_checkpoint.jsonl
 *_candidates.txt
@@ -30,4 +31,9 @@ candidates_*.txt
 sourcing_data.json
 sourcing_channels.json
 sourcing_list.txt
-data/
+
+# Supplier feeds that a tool regenerates. vp_feed.csv is deliberately NOT
+# ignored: it was transcribed by hand from a PDF-style price list and there
+# is no scraper that can rebuild it.
+data/*
+!data/vp_feed.csv

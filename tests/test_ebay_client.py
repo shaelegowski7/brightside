@@ -190,7 +190,7 @@ def test_bulk_calls_are_chunked_at_ebay_limit_of_25(monkeypatch):
         return {"responses": [{"statusCode": 200, "sku": r["sku"]} for r in body["requests"]]}
 
     monkeypatch.setattr(ebay_client, "_request", fake_request)
-    items = [{"sku": f"S{i}", "inventoryItem": {}} for i in range(60)]
+    items = [{"sku": f"S{i}", "condition": "NEW", "product": {}} for i in range(60)]
     results = ebay_client.bulk_create_or_replace_inventory_items(items)
 
     assert batches == [25, 25, 10]

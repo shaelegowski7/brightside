@@ -25,11 +25,53 @@ over (see app/candidate_finder.py's same convention). Locally this is moot
 anyway since SP-API creds live on Railway only.
 """
 import json
+import os
+import re
+import socket
+import sys
 import time
+import traceback
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from app import keepa_client, spapi_client
+
+def _fix_railway_internal_db_url() -> None:
+    """Run BEFORE app.database is imported (it builds its engine at import
+    time from whatever DATABASE_URL says).
+
+    These scans want Railway's SP-API credentials, and the way to get them
+    locally is `railway run -- python tools/scan_x_feed.py`. But that also
+    injects Railway's *internal* DATABASE_URL (postgres.railway.internal),
+    which only resolves inside Railway's own network -- locally every scan
+    dies instantly with "could not translate host name". The local .env has
+    the public proxy URL for the same database.
+
+    So: if DATABASE_URL points at an unresolvable .railway.internal host and
+    .env offers a different one, use .env's. Checked by actually resolving
+    the name rather than pattern-matching alone, so this stays inert when
+    the code really is running inside Railway.
+    """
+    url = os.environ.get("DATABASE_URL", "")
+    if ".railway.internal" not in url:
+        return
+    host = url.split("@")[-1].split("/")[0].split(":")[0]
+    try:
+        socket.getaddrinfo(host, None)
+        return                      # resolves -- we're inside Railway, leave it
+    except socket.gaierror:
+        pass
+    try:
+        from dotenv import dotenv_values
+        local = dotenv_values(Path(__file__).resolve().parent.parent / ".env").get("DATABASE_URL")
+    except Exception:
+        local = None
+    if local and local != url:
+        os.environ["DATABASE_URL"] = local
+        print(f"[SCAN] {host} is unreachable from here -- using .env's DATABASE_URL instead")
+
+_fix_railway_internal_db_url()   # MUST precede app.database's import-time engine build
+
+from app import keepa_client, scan_store, spapi_client
 from app.config import get_config
 from app.database import SessionLocal
 from app.decision.engine import DecisionConfig, ScoreInput, Verdict, score_deal
@@ -69,6 +111,90 @@ class FeedRow:
                             # or "x10 multiple" -- whatever's worth a human
                             # seeing next to the price that this dataclass
                             # doesn't have a dedicated field for.
+
+
+# Real incident, 2026-09-05 (pharmazon scan): 9/9 "PASS" results turned out
+# to be a single unit's EAN matched to an ASIN that was actually a multipack
+# bundle of that same unit ("Valupak Vitamin D3 1000Iu Tablet" at 0.83/unit
+# matched to Keepa's "6 X Valupak Vitamin D 1000Iu") -- some FBA seller
+# shrink-wrapped N singles and reused the single unit's barcode rather than
+# registering a proper multipack GTIN, so Amazon's catalog (and therefore
+# Keepa) has the wrong EAN attached to a "Pack of N"/"Case of N" ASIN. Every
+# one of those 9 was actually a loss once corrected for the real N-unit cost
+# needed to fulfil what the listing promises.
+#
+# This can't be fixed by trusting Keepa's title alone -- some source rows are
+# *themselves* genuinely a multi-unit product (e.g. a wholesaler selling
+# "12-Pack" of pads as its own retail unit), so a bare number in the ASIN
+# title isn't inherently wrong. What's wrong is when the ASIN's implied
+# multiplier is bigger than what the feed row's own name already says --
+# that gap is the number of extra units you'd actually need to buy that the
+# ROI math didn't account for. Reported as a flag, not auto-filtered or
+# auto-corrected (same convention as the gating check below): a regex over
+# free-text titles will misfire sometimes, and silently rescaling buy_price
+# on a guessed multiplier risks being confidently wrong in the other
+# direction. A human should look at the specific pair of titles before
+# trusting either number.
+_PACK_PATTERNS = [
+    re.compile(r"packs?\s+of\s+(\d+)"),
+    re.compile(r"case\s+of\s+(\d+)"),
+    re.compile(r"(\d+)\s*x\b"),
+    re.compile(r"\bx\s*(\d+)\b"),
+    re.compile(r"(\d+)\s*[- ]packs?\b"),
+]
+
+
+def _pack_multiplier(text: str | None) -> int | None:
+    """How many sellable units a title implies, multiplying each distinct
+    nesting level found (e.g. "Case of 8 Packs of 12" -> 8 * 12 = 96).
+    Text with no multipack language returns 1.
+
+    Returns **None** when there is no text to read, which is not the same
+    answer as 1 and must not be collapsed into it. This previously returned
+    1 for a missing title, so an absent Keepa title compared equal to a
+    feed's implied 1 and the pack-size check silently passed. That is how
+    every Pharmazon candidate reached the report unflagged while the real
+    ASINs were "Euthymol ... Pack of 5", "6 x Deep Heat Heat Rub 100g",
+    "Cymex Cream for Cold Sores x 6" and so on (verified against the live
+    listings, 2026-09-06) -- priced as singles, they showed 300-550% ROI;
+    priced as the 5- and 6-packs they actually are, four of five lose
+    money. Unknown has to stay visibly unknown.
+    """
+    if not text:
+        return None
+    t = text.lower()
+    found = []
+    for pat in _PACK_PATTERNS:
+        for m in pat.finditer(t):
+            try:
+                n = int(m.group(1))
+            except (IndexError, ValueError):
+                continue
+            if 1 < n <= 1000:
+                found.append(n)
+    if not found:
+        return 1
+    total = 1
+    for n in sorted(set(found), reverse=True):
+        total *= n
+    return total
+
+
+def _bundle_units(feed_mult: int | None, asin_mult: int | None) -> int:
+    """How many feed units go into one sale on this ASIN.
+
+    Buying N singles and shipping them as a set is ordinary FBA bundling,
+    so a bigger ASIN pack is a cost multiplier, not a reject. Only whole
+    multiples count: a 3-unit feed item against a 2-pack ASIN is not
+    something you can assemble, so it stays at 1 and the caller flags it
+    for a human. Unknown on either side also stays at 1 -- scoring at face
+    value and saying so beats inventing a multiplier.
+    """
+    if feed_mult is None or asin_mult is None:
+        return 1
+    if asin_mult > feed_mult and asin_mult % feed_mult == 0:
+        return asin_mult // feed_mult
+    return 1
 
 
 def _stage1_by_ean(db, eans_batch: list[str], source_name: str) -> dict[str, tuple[str, Stage1Result]]:
@@ -127,7 +253,24 @@ def run_scan(source_name: str, rows: list[FeedRow]) -> None:
     """source_name becomes the prefix for every output/checkpoint file
     (<source_name>_candidates.txt, <source_name>_stage{1,2}_checkpoint.jsonl)
     and the Keepa token-log stage label -- keep it short and stable across
-    reruns of the same supplier's list so checkpoints keep matching up."""
+    reruns of the same supplier's list so checkpoints keep matching up.
+
+    Crashes log their own traceback before propagating -- see _run_scan.
+    These scans run for hours under a restart wrapper whose stderr nobody
+    captures, so an unhandled exception showed up only as "scan died
+    (exit 1)" with no way to tell what broke (novanex, 2026-09-06, twice).
+    Printing to stdout puts it in the same log as the progress lines.
+    """
+    try:
+        _run_scan(source_name, rows)
+    except BaseException as e:   # noqa: BLE001 -- re-raised immediately
+        print(f"[SCAN:{source_name}] DIED: {type(e).__name__}: {e}")
+        traceback.print_exc(file=sys.stdout)
+        sys.stdout.flush()
+        raise
+
+
+def _run_scan(source_name: str, rows: list[FeedRow]) -> None:
     out_path = _REPO_ROOT / f"{source_name}_candidates.txt"
     stage1_checkpoint_path = _REPO_ROOT / f"{source_name}_stage1_checkpoint.jsonl"
     stage2_checkpoint_path = _REPO_ROOT / f"{source_name}_stage2_checkpoint.jsonl"
@@ -233,8 +376,21 @@ def run_scan(source_name: str, rows: list[FeedRow]) -> None:
                     if category_size:
                         category_rank_percentile = stage2.leaf_category_rank / category_size
 
+                # --- pack size: price what the ASIN actually sells ---
+                # The feed sells one unit; the ASIN may be a multipack. Buying
+                # N singles and shipping them as a set is ordinary FBA
+                # bundling, so a mismatch is not a reject -- it is a different
+                # cost base. Score it at N x the unit price and let the
+                # economics decide, rather than crediting a 6-pack's sale
+                # price against one unit's cost (which is what produced
+                # Pharmazon's phantom 300-550% ROIs). Unknown ASIN pack size
+                # means unknown cost, so score at face value but say so.
+                feed_mult = _pack_multiplier(row.name)
+                asin_mult = _pack_multiplier(stage2.title)
+                units_per_sale = _bundle_units(feed_mult, asin_mult)
+
                 score_input = ScoreInput(
-                    buy_price_pence=row.buy_price_pence,
+                    buy_price_pence=row.buy_price_pence * units_per_sale,
                     match_confidence="high",   # EAN match, same confidence tier as jsonld in pipeline.py
                     category=stage2.category or "",
                     fba_offer_count=stage2.fba_offer_count,
@@ -242,6 +398,7 @@ def run_scan(source_name: str, rows: list[FeedRow]) -> None:
                     fees=fees,
                     sales_rank=stage2.sales_rank,
                     est_monthly_sales=stage2.est_monthly_sales,
+                    est_monthly_sales_source=stage2.est_monthly_sales_source,
                     buybox_price_pence=stage2.buybox_price_pence,
                     lowest_fba_offer_pence=stage2.lowest_fba_offer_pence,
                     buybox_avg_90d_pence=stage2.buybox_avg_90d_pence,
@@ -252,12 +409,43 @@ def run_scan(source_name: str, rows: list[FeedRow]) -> None:
                     category_rank_percentile=category_rank_percentile,
                 )
                 result = score_deal(score_input, cfg)
+                flags = list(result.flags)
+                if asin_mult is None:
+                    flags.append(
+                        "pack_size_unknown: no Amazon title to read a pack size from, "
+                        "scored as 1 unit per sale -- confirm on the listing before ordering"
+                    )
+                elif units_per_sale > 1:
+                    flags.append(
+                        f"requires_bundling: {units_per_sale} units per sale "
+                        f"(Amazon title {stage2.title!r} implies x{asin_mult}, feed unit implies "
+                        f"x{feed_mult}) -- costed at {units_per_sale}x, and needs prep "
+                        "(poly-bag, label, suffocation warning) not priced in here"
+                    )
+                elif asin_mult != feed_mult:
+                    flags.append(
+                        f"pack_size_mismatch: feed name implies x{feed_mult}, "
+                        f"Amazon title ({stage2.title!r}) implies x{asin_mult} -- not a whole "
+                        "multiple, so NOT repriced; check the listing by hand"
+                    )
                 entry = {
                     "asin": asin, "ean": ean, "brand": row.brand, "name": row.name,
+                    "title": stage2.title,
                     "buy_price_pence": row.buy_price_pence, "list_price": row.list_price, "note": row.note,
+                    "units_per_sale": units_per_sale,
+                    "bundle_cost_pence": row.buy_price_pence * units_per_sale,
                     "sell_price_pence": result.sell_price_pence, "net_profit_pence": result.net_profit_pence,
                     "roi": result.roi, "sales_rank": stage2.sales_rank, "fba_offer_count": stage2.fba_offer_count,
-                    "verdict": result.verdict.value, "verdict_reason": result.verdict_reason, "flags": result.flags,
+                    # Velocity is the single biggest reject reason across every
+                    # scan run so far, and until 2026-09-09 the number behind it
+                    # survived only as prose inside verdict_reason — so "which
+                    # products actually sell" needed re-querying Keepa for data
+                    # already paid for. Source matters as much as the figure:
+                    # keepa_confirmed is a real monthlySold badge, rank_drop_proxy
+                    # is a noisy stand-in the gate trusts far less.
+                    "est_monthly_sales": stage2.est_monthly_sales,
+                    "est_monthly_sales_source": stage2.est_monthly_sales_source,
+                    "verdict": result.verdict.value, "verdict_reason": result.verdict_reason, "flags": flags,
                 }
                 ckpt.write(json.dumps(entry) + "\n")
                 results.append(entry)
@@ -281,19 +469,46 @@ def run_scan(source_name: str, rows: list[FeedRow]) -> None:
         for r in sorted(passes, key=lambda r: -(r["roi"] or 0)):
             if check_gating:
                 time.sleep(_GATING_DELAY_S)
-            gated = spapi_client.check_gating(db, r["asin"]) if check_gating else None
+            g = spapi_client.check_gating_detail(db, r["asin"]) if check_gating else None
+            # "gated True" hides the only distinction that matters when deciding
+            # what to order: APPROVAL_REQUIRED is a trade invoice away,
+            # NOT_ELIGIBLE is dead. Record the reason code, not a bool.
+            gated = "unchecked" if g is None else ((g.reason_code or "yes") if g.gated else "no")
+            approval = f"\n  apply: {g.approval_url}" if g and g.approval_url else ""
             note = f" ({r['note']})" if r["note"] else ""
+            # Report the cost actually scored. For a bundle that is N units,
+            # not one -- printing the unit price next to a multipack's sale
+            # price is exactly the juxtaposition that made losing candidates
+            # look like 500% ROI.
+            units = r.get("units_per_sale", 1)
+            cost_pence = r.get("bundle_cost_pence", r["buy_price_pence"])
+            cost_str = f"{cost_pence/100:.2f}"
+            if units > 1:
+                cost_str += f" ({units} x {r['buy_price_pence']/100:.2f})"
             f.write(
                 f"{r['brand']} | {r['name']}\n"
-                f"  ASIN {r['asin']} | EAN {r['ean']} | cost {r['buy_price_pence']/100:.2f} "
+                f"  ASIN {r['asin']} | EAN {r['ean']} | cost {cost_str} "
                 f"(list {r['list_price']:.2f}{note})\n"
                 f"  sell {r['sell_price_pence']/100:.2f} | net_profit {r['net_profit_pence']/100:.2f} "
                 f"| roi {r['roi']:.1%} | rank {r['sales_rank']} | offers {r['fba_offer_count']} "
                 f"| verdict {r['verdict']} | gated {gated} | flags {r['flags']}\n"
-                f"  https://www.amazon.co.uk/dp/{r['asin']}\n\n"
+                f"  https://www.amazon.co.uk/dp/{r['asin']}{approval}\n\n"
             )
         f.write(f"\nReject reasons (stage2 scored, {len(results) - len(passes)} total):\n")
         for k, v in sorted(reject_reasons.items(), key=lambda kv: -kv[1]):
             f.write(f"  {k}: {v}\n")
 
     print(f"[SCAN:{source_name}] wrote {len(passes)} candidates to {out_path}")
+
+    # The checkpoints are the resume mechanism; this is the queryable record.
+    # Best-effort on purpose: a scan that found deals must not report failure
+    # because the database was unreachable. The .jsonl files still hold
+    # everything and tools/backfill_scan_results.py can replay them.
+    try:
+        stage1_records = list(_load_checkpoint(stage1_checkpoint_path, "ean").values())
+        written, _ = scan_store.persist_scan(db, source_name, stage1_records, results)
+        print(f"[SCAN:{source_name}] persisted {written} rows to supplier_scan_results")
+    except Exception as e:   # noqa: BLE001 -- reporting only, the scan itself succeeded
+        print(f"[SCAN:{source_name}] WARNING: could not persist to DB "
+              f"({type(e).__name__}: {e}); checkpoints intact, "
+              f"replay with tools/backfill_scan_results.py")
