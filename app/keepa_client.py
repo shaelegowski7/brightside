@@ -271,7 +271,7 @@ class Stage2Result:
     referral_fee_percentage: float | None   # Keepa's own referral %, percentage points (13.0 == 13%); None if unavailable
     leaf_category_id: int | None   # deepest categoryTree catId with its own salesRanks entry -- see _leaf_category
     leaf_category_rank: int | None   # most recent rank within leaf_category_id, for the velocity gate's percentile leg
-    est_monthly_sales_source: str | None = None   # "keepa_confirmed" (real monthlySold badge) or "rank_drop_proxy" (noisy stand-in) — see velocity gate in decision/engine.py, which trusts these very differently. Defaulted so existing keyword-constructed Stage2Result call sites (tests) don't need updating.
+    est_monthly_sales_source: str | None = None   # "keepa_confirmed" (real monthlySold badge) or None; kept so stored rows distinguish from pre-2026-10-01 "rank_drop_proxy" ones
     distinct_sellers_ever: int | None = None   # see _seller_history
     max_new_offers_ever: int | None = None
 
@@ -427,17 +427,11 @@ def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
         sales_rank = _csv_value(current, _IDX_SALES_RANK)
         buybox_avg_90d = _csv_value(avg90, _IDX_BUY_BOX_SHIPPING)
 
+        # Badge only -- see the velocity gate in decision/engine.py for why
+        # salesRankDrops30 is no longer used as a fallback.
         monthly_sold = product.get("monthlySold")
-        rank_drops_30 = stats.get("salesRankDrops30")
-        if monthly_sold:
-            est_monthly_sales = float(monthly_sold)
-            est_monthly_sales_source = "keepa_confirmed"
-        elif rank_drops_30:
-            est_monthly_sales = float(rank_drops_30)
-            est_monthly_sales_source = "rank_drop_proxy"
-        else:
-            est_monthly_sales = None
-            est_monthly_sales_source = None
+        est_monthly_sales = float(monthly_sold) if monthly_sold else None
+        est_monthly_sales_source = "keepa_confirmed" if monthly_sold else None
 
         weight_g = product.get("packageWeight")
         dims_mm = [d for d in (product.get(k) for k in ("packageHeight", "packageLength", "packageWidth")) if d]

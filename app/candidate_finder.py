@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from . import keepa_client, models, spapi_client
-from .decision.engine import DecisionConfig
+from .decision.engine import DecisionConfig, months_to_sell
 from .pricing.fees import FeeProvider, SizeDims
 
 # Sorting the finder by best rank surfaces category megasellers, which in
@@ -355,11 +355,9 @@ def score_asins(
         fee_vat_mult = 1.0 if cfg.vat_registered else 1.20
         total_fees = round((fees.referral_fee_pence + fees.fba_fulfilment_fee_pence) * fee_vat_mult)
 
-        # Same months-to-sell model as engine.py, so the storage cost
-        # baked into the target price matches what scoring would charge.
-        est_monthly_sales = stage2.est_monthly_sales or 0.0
-        our_share = est_monthly_sales / (stage2.fba_offer_count + 1)
-        est_months_to_sell = min(max(1.0 / max(our_share, 0.1), 1.0), 6.0)
+        # Finder results always carry a monthlySold badge (monthlySold_gte),
+        # so the rank-percentile fallback never applies here.
+        est_months_to_sell = months_to_sell(stage2.est_monthly_sales, stage2.fba_offer_count, None, cfg)
         storage_cost = round(fees.monthly_storage_fee_pence * est_months_to_sell)
 
         target = target_buy_price_pence(stage2.buybox_price_pence, total_fees, storage_cost, cfg)

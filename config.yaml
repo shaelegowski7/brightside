@@ -131,23 +131,14 @@ price_sanity:
 
 # Velocity gate (Fix Build Guide phase 3): reject deals that are ROI-green
 # but effectively dead stock. A deal must clear EITHER leg:
-# - est_monthly_sales >= min_monthly_sales (Keepa monthlySold / rank-drop proxy), or
+# - est_monthly_sales >= min_monthly_sales (Keepa's monthlySold badge only), or
 # - category_rank_percentile <= top_category_percentile, computed at the
 #   *leaf* category level (see keepa_client.stage2_full's leaf_category_id/
 #   leaf_category_rank) — root-level percentile is too coarse to mean
 #   anything (verified live: top 2% of a 22M-product root category is a
 #   looser bound than the existing default_rank_threshold).
-#
-# proxy_multiplier: when est_monthly_sales came from the rank-drop proxy
-# (Keepa's real monthlySold badge wasn't available) rather than confirmed
-# real data, the min_monthly_sales floor is multiplied by this before the
-# gate checks it. Added 2026-09-06 after two ancientwisdom PASS items
-# (coconut lamp, shamanic drum) both turned out to sell ~1/month in
-# SellerAmp despite a proxy estimate clearing the un-multiplied 10/month
-# floor — a ~10x overestimate on both. Two data points, so 5x here is a
-# deliberately cautious margin, not a calibrated correction; a PASS that
-# only clears the gate via the proxy still carries a "velocity_unconfirmed"
-# flag in the report regardless of this multiplier (see engine.py).
+# The rank-drop proxy (and its proxy_multiplier) was removed 2026-10-01;
+# see the velocity gate in app/decision/engine.py.
 velocity:
   # Raised 10 -> 50 on 2026-09-09. Two reasons, and they agree. First, it is
   # now an explicit sourcing criterion: nothing is worth stocking below ~50
@@ -158,7 +149,6 @@ velocity:
   min_monthly_sales: 50
   top_category_percentile: 0.02
   category_size_cache_ttl_days: 30
-  proxy_multiplier: 5
 
 # Reverse candidate search -- ask Keepa for products that already clear
 # every structural gate, then work out what we'd have to source them at.

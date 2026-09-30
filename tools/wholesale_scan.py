@@ -398,7 +398,6 @@ def _run_scan(source_name: str, rows: list[FeedRow]) -> None:
                     fees=fees,
                     sales_rank=stage2.sales_rank,
                     est_monthly_sales=stage2.est_monthly_sales,
-                    est_monthly_sales_source=stage2.est_monthly_sales_source,
                     buybox_price_pence=stage2.buybox_price_pence,
                     lowest_fba_offer_pence=stage2.lowest_fba_offer_pence,
                     buybox_avg_90d_pence=stage2.buybox_avg_90d_pence,
@@ -442,9 +441,8 @@ def _run_scan(source_name: str, rows: list[FeedRow]) -> None:
                     # scan run so far, and until 2026-09-09 the number behind it
                     # survived only as prose inside verdict_reason — so "which
                     # products actually sell" needed re-querying Keepa for data
-                    # already paid for. Source matters as much as the figure:
-                    # keepa_confirmed is a real monthlySold badge, rank_drop_proxy
-                    # is a noisy stand-in the gate trusts far less.
+                    # already paid for. Source separates today's badge-only
+                    # figures from older rank_drop_proxy checkpoints.
                     "est_monthly_sales": stage2.est_monthly_sales,
                     "est_monthly_sales_source": stage2.est_monthly_sales_source,
                     "verdict": result.verdict.value, "verdict_reason": result.verdict_reason, "flags": flags,

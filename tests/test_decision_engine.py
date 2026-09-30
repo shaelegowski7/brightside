@@ -195,6 +195,22 @@ def test_velocity_gate_rejects_batmobile_shaped_deal():
     assert "roi" not in (result.verdict_reason or "")
 
 
+def test_badgeless_rank_pass_costs_storage_at_the_sales_floor():
+    """No badge but top-2% leaf rank: storage is costed at the 50/mo floor
+    (1 month), not the 6-month worst case an unknown rate would imply."""
+    inp = _velocity_base_input(est_monthly_sales=None, category_rank_percentile=0.01)
+    result = score_deal(inp, default_config(velocity_min_monthly_sales=50))
+    assert result.verdict in (Verdict.PASS, Verdict.PASS_WITH_FLAGS)
+    assert result.est_months_to_sell == 1.0
+
+
+@pytest.mark.parametrize("sales,pct,expected", [(None, 0.01, 1.0), (None, 0.05, 6.0), (None, None, 6.0), (200, None, 1.0)],
+                         ids=["badgeless_top_rank", "badgeless_loose_rank", "no_data", "badge"])
+def test_months_to_sell_shared_model(sales, pct, expected):
+    from app.decision.engine import months_to_sell
+    assert months_to_sell(sales, 1, pct, default_config(velocity_min_monthly_sales=50)) == expected
+
+
 def test_single_seller_listing_rejected():
     inp = _velocity_base_input(est_monthly_sales=12, distinct_sellers_ever=1, max_new_offers_ever=1)
     result = score_deal(inp, default_config())
