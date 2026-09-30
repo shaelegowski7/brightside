@@ -195,6 +195,20 @@ def test_velocity_gate_rejects_batmobile_shaped_deal():
     assert "roi" not in (result.verdict_reason or "")
 
 
+def test_single_seller_listing_rejected():
+    inp = _velocity_base_input(est_monthly_sales=12, distinct_sellers_ever=1, max_new_offers_ever=1)
+    result = score_deal(inp, default_config())
+    assert result.verdict == Verdict.REJECT
+    assert result.verdict_reason == "single_seller_listing"
+
+
+@pytest.mark.parametrize("sellers,peak", [(2, 2), (1, 2), (None, 1), (1, None)],
+                         ids=["many_sellers", "ids_undercount", "no_seller_data", "no_count_data"])
+def test_single_seller_listing_needs_both_legs(sellers, peak):
+    inp = _velocity_base_input(est_monthly_sales=12, distinct_sellers_ever=sellers, max_new_offers_ever=peak)
+    assert score_deal(inp, default_config()).verdict != Verdict.REJECT
+
+
 def test_roi_below_threshold_rejects_after_financials():
     """Thin margin: passes every hard filter but roi/net_profit both miss
     threshold -> REJECT with the numbers still populated for review."""

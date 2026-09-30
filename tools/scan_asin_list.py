@@ -239,6 +239,8 @@ def run(rows: list[tuple[str, int | None, str]]) -> None:
             oversize=oversize,
             gated=None,   # reported below, never filtered on
             category_rank_percentile=category_rank_percentile,
+            distinct_sellers_ever=stage2.distinct_sellers_ever,
+            max_new_offers_ever=stage2.max_new_offers_ever,
         ), cfg)
         if result.verdict != Verdict.REJECT:
             passes += 1

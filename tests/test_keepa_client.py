@@ -86,6 +86,42 @@ def test_amazon_on_listing_true_even_when_buybox_is_amazon_flag_stale(db_session
     assert results["B0TEST0001"].amazon_on_listing is False
 
 
+def _count_new_csv(counts: list[int]) -> list:
+    csv: list = [None] * 12
+    csv[keepa_client._IDX_COUNT_NEW] = [v for i, c in enumerate(counts) for v in (1000 + i, c)]
+    return csv
+
+
+def test_seller_history_single_seller_listing(db_session, monkeypatch):
+    product = _product(offers=[{"sellerId": "BRANDOWNER", "condition": 1}])
+    product["buyBoxSellerIdHistory"] = [1000, "BRANDOWNER", 2000, "-1", 3000, "BRANDOWNER"]
+    product["csv"] = _count_new_csv([1, 0, 1])
+    monkeypatch.setattr(keepa_client, "_get_client", lambda: _FakeKeepaClient([product]))
+
+    r = keepa_client.stage2_full(db_session, ["B0TEST0001"])["B0TEST0001"]
+
+    assert (r.distinct_sellers_ever, r.max_new_offers_ever) == (1, 1)
+
+
+def test_seller_history_unions_offers_and_buybox_history(db_session, monkeypatch):
+    product = _product(offers=[{"sellerId": "A", "condition": 1}])
+    product["buyBoxSellerIdHistory"] = [1000, "B", 2000, "C"]
+    product["csv"] = _count_new_csv([1, 3, 2])
+    monkeypatch.setattr(keepa_client, "_get_client", lambda: _FakeKeepaClient([product]))
+
+    r = keepa_client.stage2_full(db_session, ["B0TEST0001"])["B0TEST0001"]
+
+    assert (r.distinct_sellers_ever, r.max_new_offers_ever) == (3, 3)
+
+
+def test_seller_history_unknown_when_payload_has_none(db_session, monkeypatch):
+    monkeypatch.setattr(keepa_client, "_get_client", lambda: _FakeKeepaClient([_product()]))
+
+    r = keepa_client.stage2_full(db_session, ["B0TEST0001"])["B0TEST0001"]
+
+    assert (r.distinct_sellers_ever, r.max_new_offers_ever) == (None, None)
+
+
 class _FlakyClient:
     """Raises `exc` on the first `fail_times` calls, then succeeds."""
 

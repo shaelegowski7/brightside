@@ -421,6 +421,8 @@ def _score_and_record(
         oversize=oversize,
         gated=gated,
         category_rank_percentile=category_rank_percentile,
+        distinct_sellers_ever=stage2.distinct_sellers_ever,
+        max_new_offers_ever=stage2.max_new_offers_ever,
     )
     result = score_deal(score_input, decision_cfg)
 

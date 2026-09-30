@@ -88,6 +88,7 @@ def _query_with_retry(client, *args, **kwargs):
 _IDX_NEW = 1
 _IDX_SALES_RANK = 3
 _IDX_NEW_FBA = 10
+_IDX_COUNT_NEW = 11
 _IDX_BUY_BOX_SHIPPING = 18
 _IDX_COUNT_NEW_FBA = 34
 
@@ -167,6 +168,25 @@ def _rank_history_days(product: dict) -> int | None:
         return None
     since = tracking_since if tracking_since.tzinfo else tracking_since.replace(tzinfo=timezone.utc)
     return max((datetime.now(timezone.utc) - since).days, 0)
+
+
+def _seller_history(product: dict) -> tuple[int | None, int | None]:
+    """(distinct seller IDs ever seen, peak new-offer count ever) over the
+    ASIN's whole Keepa history, for the private-label flag in
+    decision/engine.py. Seller IDs come from both the offers array and
+    buyBoxSellerIdHistory (flat [time, sellerId, ...]; IDs starting "-" are
+    Keepa's no-seller markers). The count history is kept as a second leg
+    because Keepa drops old offers from the array: B09QFDYYPQ showed one
+    seller ID but a peak of 2 offers (checked live 2026-09-30). None means
+    the payload had no data, not zero sellers."""
+    ids = {o["sellerId"] for o in (product.get("offers") or []) if o.get("sellerId")}
+    bb = product.get("buyBoxSellerIdHistory") or []
+    ids |= {s for s in bb[1::2] if isinstance(s, str) and s and not s.startswith("-")}
+
+    csv = product.get("csv") or []
+    history = csv[_IDX_COUNT_NEW] if len(csv) > _IDX_COUNT_NEW and csv[_IDX_COUNT_NEW] else []
+    counts = [v for v in history[1::2] if v is not None and v >= 0]
+    return (len(ids) if ids else None), (max(counts) if counts else None)
 
 
 def _referral_fee_percentage(product: dict) -> float | None:
@@ -252,6 +272,8 @@ class Stage2Result:
     leaf_category_id: int | None   # deepest categoryTree catId with its own salesRanks entry -- see _leaf_category
     leaf_category_rank: int | None   # most recent rank within leaf_category_id, for the velocity gate's percentile leg
     est_monthly_sales_source: str | None = None   # "keepa_confirmed" (real monthlySold badge) or "rank_drop_proxy" (noisy stand-in) — see velocity gate in decision/engine.py, which trusts these very differently. Defaulted so existing keyword-constructed Stage2Result call sites (tests) don't need updating.
+    distinct_sellers_ever: int | None = None   # see _seller_history
+    max_new_offers_ever: int | None = None
 
 
 def stage1_screen(db: Session, codes: list[str], is_ean: bool) -> dict[str, Stage1Result]:
@@ -420,6 +442,7 @@ def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
         weight_g = product.get("packageWeight")
         dims_mm = [d for d in (product.get(k) for k in ("packageHeight", "packageLength", "packageWidth")) if d]
         leaf_cat_id, leaf_rank = _leaf_category(product)
+        distinct_sellers_ever, max_new_offers_ever = _seller_history(product)
 
         results[asin] = Stage2Result(
             asin=asin,
@@ -442,6 +465,8 @@ def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
             referral_fee_percentage=_referral_fee_percentage(product),
             leaf_category_id=leaf_cat_id,
             leaf_category_rank=leaf_rank,
+            distinct_sellers_ever=distinct_sellers_ever,
+            max_new_offers_ever=max_new_offers_ever,
         )
     return results
 
