@@ -63,6 +63,8 @@ class ScoreInput:
     oversize: bool = False
     gated: bool | None = None        # None = not checked (no SP-API yet)
     category_rank_percentile: float | None = None   # sales_rank / leaf-category productCount; None if unavailable
+    distinct_sellers_ever: int | None = None   # lifetime, from Keepa; None = unknown
+    max_new_offers_ever: int | None = None
 
 
 @dataclass
@@ -152,6 +154,13 @@ def score_deal(inp: ScoreInput, cfg: DecisionConfig) -> ScoreResult:
         return _reject("category_blocklisted", sell_price)
     if inp.amazon_on_listing:
         return _reject("amazon_on_listing", sell_price)
+    # Only one seller ever on the listing is the private-label shape (HGUIM,
+    # KKSTY: 1 ever; real brands like Myprotein or Lesser & Pavey show 2-23),
+    # and private label can't be resold. Both legs must agree -- see
+    # keepa_client._seller_history for why seller IDs alone undercount.
+    if (inp.distinct_sellers_ever is not None and inp.distinct_sellers_ever <= 1
+            and inp.max_new_offers_ever is not None and inp.max_new_offers_ever <= 1):
+        return _reject("single_seller_listing", sell_price)
     if inp.fba_offer_count > cfg.max_fba_offers:
         return _reject(f"fba_offer_count {inp.fba_offer_count} > max {cfg.max_fba_offers}", sell_price)
     rank_threshold = cfg.category_rank_thresholds.get(inp.category, cfg.default_rank_threshold)

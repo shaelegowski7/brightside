@@ -407,6 +407,8 @@ def _run_scan(source_name: str, rows: list[FeedRow]) -> None:
                     oversize=oversize,
                     gated=None,   # checked separately below, reported not filtered
                     category_rank_percentile=category_rank_percentile,
+                    distinct_sellers_ever=stage2.distinct_sellers_ever,
+                    max_new_offers_ever=stage2.max_new_offers_ever,
                 )
                 result = score_deal(score_input, cfg)
                 flags = list(result.flags)
