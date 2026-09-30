@@ -122,6 +122,27 @@ def test_seller_history_unknown_when_payload_has_none(db_session, monkeypatch):
     assert (r.distinct_sellers_ever, r.max_new_offers_ever) == (None, None)
 
 
+def test_rank_drops_no_longer_estimate_sales(db_session, monkeypatch):
+    product = _product()
+    product["stats"]["salesRankDrops30"] = 80
+    monkeypatch.setattr(keepa_client, "_get_client", lambda: _FakeKeepaClient([product]))
+
+    r = keepa_client.stage2_full(db_session, ["B0TEST0001"])["B0TEST0001"]
+
+    assert (r.est_monthly_sales, r.est_monthly_sales_source) == (None, None)
+
+
+def test_monthly_sold_badge_is_the_sales_figure(db_session, monkeypatch):
+    product = _product()
+    product["monthlySold"] = 200
+    product["stats"]["salesRankDrops30"] = 30
+    monkeypatch.setattr(keepa_client, "_get_client", lambda: _FakeKeepaClient([product]))
+
+    r = keepa_client.stage2_full(db_session, ["B0TEST0001"])["B0TEST0001"]
+
+    assert (r.est_monthly_sales, r.est_monthly_sales_source) == (200.0, "keepa_confirmed")
+
+
 class _FlakyClient:
     """Raises `exc` on the first `fail_times` calls, then succeeds."""
 

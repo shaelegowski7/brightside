@@ -54,7 +54,6 @@ class ScoreInput:
     fees: FeeInput
     sales_rank: int | None = None
     est_monthly_sales: float | None = None
-    est_monthly_sales_source: str | None = None   # "keepa_confirmed" | "rank_drop_proxy" | None — see velocity gate
     buybox_price_pence: int | None = None
     lowest_fba_offer_pence: int | None = None
     buybox_avg_90d_pence: int | None = None
@@ -98,7 +97,6 @@ class DecisionConfig:
     min_sell_price_pence: int = 0
     velocity_min_monthly_sales: float = 10.0
     velocity_top_percentile: float = 0.02
-    velocity_proxy_multiplier: float = 5.0
 
     @classmethod
     def from_app_config(cls, cfg: dict) -> "DecisionConfig":
@@ -121,7 +119,6 @@ class DecisionConfig:
             min_sell_price_pence=thresholds.get("min_sell_price_pence", 0),
             velocity_min_monthly_sales=velocity_cfg.get("min_monthly_sales", 10.0),
             velocity_top_percentile=velocity_cfg.get("top_category_percentile", 0.02),
-            velocity_proxy_multiplier=velocity_cfg.get("proxy_multiplier", 5.0),
         )
 
 
@@ -185,44 +182,29 @@ def score_deal(inp: ScoreInput, cfg: DecisionConfig) -> ScoreResult:
     # of products). category_rank_percentile is None whenever leaf-category
     # data wasn't available, in which case only the sales-volume leg counts.
     #
-    # est_monthly_sales is NOT one signal -- it's either Keepa's own real
-    # "bought in past month" badge (est_monthly_sales_source ==
-    # "keepa_confirmed") or, when that's absent, a fallback proxy counting
-    # sales-rank drops over 30 days (source == "rank_drop_proxy"). Confirmed
-    # live 2026-09-06 on two separate ancientwisdom PASS items (coconut lamp,
-    # shamanic drum): SellerAmp's real sales data showed ~1/month on both,
-    # against a proxy estimate that had cleared the 10/month floor -- a ~10x
-    # overestimate, consistently, on the only two checked so far. Two data
-    # points isn't enough to calibrate a precise correction factor, but it's
-    # enough to say the proxy can't be trusted at face value: proxy-sourced
-    # estimates need to clear a much higher bar (velocity_proxy_multiplier,
-    # default 5x) before they're allowed through the same gate real Keepa
-    # data would pass at 1x. A PASS that only cleared the gate this way still
-    # gets flagged below so the report doesn't present it with the same
-    # confidence as a keepa_confirmed or rank-percentile pass. ---
-    effective_sales_floor = cfg.velocity_min_monthly_sales
-    if inp.est_monthly_sales_source == "rank_drop_proxy":
-        effective_sales_floor *= cfg.velocity_proxy_multiplier
-    sales_ok = (inp.est_monthly_sales or 0) >= effective_sales_floor
+    # est_monthly_sales is only Keepa's real "bought in past month" badge.
+    # The rank-drop proxy was removed 2026-10-01: it overestimated slow
+    # sellers ~10x (coconut lamp, shamanic drum) and undercounted fast ones
+    # (1,000-2,000/mo sellers showed 23-59 drops). Badge-less sellers are
+    # left to the rank leg -- 11 of 12 badge-less products with 50+ drops
+    # cleared the top-2% leaf rank in a live check. ---
+    sales_ok = (inp.est_monthly_sales or 0) >= cfg.velocity_min_monthly_sales
     rank_ok = inp.category_rank_percentile is not None and inp.category_rank_percentile <= cfg.velocity_top_percentile
     if not (sales_ok or rank_ok):
         return _reject(
             f"velocity_floor: est_monthly_sales={inp.est_monthly_sales} "
-            f"(source={inp.est_monthly_sales_source}, floor={effective_sales_floor}) "
+            f"(floor={cfg.velocity_min_monthly_sales}) "
             f"category_rank_percentile={inp.category_rank_percentile}",
             sell_price,
-        )
-    if sales_ok and not rank_ok and inp.est_monthly_sales_source == "rank_drop_proxy":
-        flags.append(
-            f"velocity_unconfirmed: passed on a rank-drop estimate ({inp.est_monthly_sales:.0f}/mo), "
-            "not Keepa's real sales data -- verify manually (e.g. SellerAmp) before ordering"
         )
 
     # --- financials ---
     fee_vat_mult = 1.0 if cfg.vat_registered else 1.20
     total_fees = round((inp.fees.referral_fee_pence + inp.fees.fba_fulfilment_fee_pence) * fee_vat_mult)
 
-    est_monthly_sales = inp.est_monthly_sales or 0.0
+    # A rank-leg pass with no badge still sells at least the floor, so cost
+    # storage at that rate rather than the 6-month worst case.
+    est_monthly_sales = inp.est_monthly_sales or (cfg.velocity_min_monthly_sales if rank_ok else 0.0)
     our_share = est_monthly_sales / (inp.fba_offer_count + 1)
     est_months_to_sell = min(max(1.0 / max(our_share, 0.1), 1.0), 6.0)
 

@@ -380,7 +380,8 @@ class SupplierScanResult(Base):
     # Velocity is the biggest single reject reason across every scan so far.
     # Source is kept alongside the number because they mean different things:
     # "keepa_confirmed" is Keepa's real monthlySold badge (bucketed, lowest
-    # bucket 50); "rank_drop_proxy" is a noisy stand-in from 30-day rank drops.
+    # bucket 50); "rank_drop_proxy" is a noisy stand-in from 30-day rank drops,
+    # only on rows scanned before 2026-10-01 when the proxy was dropped.
     est_monthly_sales = Column(Float, nullable=True)
     est_monthly_sales_source = Column(String, nullable=True)
 
