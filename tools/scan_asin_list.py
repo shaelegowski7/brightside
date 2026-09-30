@@ -169,7 +169,7 @@ def run(rows: list[tuple[str, int | None, str]]) -> None:
     from app import candidate_finder, keepa_client, spapi_client
     from app.config import get_config
     from app.database import SessionLocal
-    from app.decision.engine import DecisionConfig, ScoreInput, Verdict, score_deal
+    from app.decision.engine import DecisionConfig, ScoreInput, Verdict, months_to_sell, score_deal
     from app.pricing.fees import SizeDims, build_fee_provider
 
     db = SessionLocal()
@@ -217,8 +217,8 @@ def run(rows: list[tuple[str, int | None, str]]) -> None:
         # the reported cost breakdown match what scoring itself charges.
         fee_vat_mult = 1.0 if cfg.vat_registered else 1.20
         total_fees = round((fees.referral_fee_pence + fees.fba_fulfilment_fee_pence) * fee_vat_mult)
-        our_share = (stage2.est_monthly_sales or 0.0) / (stage2.fba_offer_count + 1)
-        est_months_to_sell = min(max(1.0 / max(our_share, 0.1), 1.0), 6.0)
+        est_months_to_sell = months_to_sell(
+            stage2.est_monthly_sales, stage2.fba_offer_count, category_rank_percentile, cfg)
         storage_cost = round(fees.monthly_storage_fee_pence * est_months_to_sell)
         target = candidate_finder.target_buy_price_pence(sell_price, total_fees, storage_cost, cfg)
 

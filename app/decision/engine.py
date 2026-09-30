@@ -132,6 +132,18 @@ def _reject(reason: str, sell_price_pence: int | None) -> ScoreResult:
     )
 
 
+def months_to_sell(est_monthly_sales: float | None, fba_offer_count: int,
+                   category_rank_percentile: float | None, cfg: DecisionConfig) -> float:
+    """Shared by every caller that costs storage, so target buy prices match
+    what scoring charges. A top-rank seller with no monthlySold badge still
+    clears the velocity floor, so it's costed at that rate rather than the
+    6-month worst case."""
+    rank_ok = category_rank_percentile is not None and category_rank_percentile <= cfg.velocity_top_percentile
+    sales = est_monthly_sales or (cfg.velocity_min_monthly_sales if rank_ok else 0.0)
+    our_share = sales / (fba_offer_count + 1)
+    return min(max(1.0 / max(our_share, 0.1), 1.0), 6.0)
+
+
 def score_deal(inp: ScoreInput, cfg: DecisionConfig) -> ScoreResult:
     flags: list[str] = []
 
@@ -202,11 +214,8 @@ def score_deal(inp: ScoreInput, cfg: DecisionConfig) -> ScoreResult:
     fee_vat_mult = 1.0 if cfg.vat_registered else 1.20
     total_fees = round((inp.fees.referral_fee_pence + inp.fees.fba_fulfilment_fee_pence) * fee_vat_mult)
 
-    # A rank-leg pass with no badge still sells at least the floor, so cost
-    # storage at that rate rather than the 6-month worst case.
-    est_monthly_sales = inp.est_monthly_sales or (cfg.velocity_min_monthly_sales if rank_ok else 0.0)
-    our_share = est_monthly_sales / (inp.fba_offer_count + 1)
-    est_months_to_sell = min(max(1.0 / max(our_share, 0.1), 1.0), 6.0)
+    est_months_to_sell = months_to_sell(
+        inp.est_monthly_sales, inp.fba_offer_count, inp.category_rank_percentile, cfg)
 
     storage_cost = round(inp.fees.monthly_storage_fee_pence * est_months_to_sell)
     # buy_price_pence subtracted here — see module docstring NOTE.

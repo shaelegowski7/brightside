@@ -204,6 +204,13 @@ def test_badgeless_rank_pass_costs_storage_at_the_sales_floor():
     assert result.est_months_to_sell == 1.0
 
 
+@pytest.mark.parametrize("sales,pct,expected", [(None, 0.01, 1.0), (None, 0.05, 6.0), (None, None, 6.0), (200, None, 1.0)],
+                         ids=["badgeless_top_rank", "badgeless_loose_rank", "no_data", "badge"])
+def test_months_to_sell_shared_model(sales, pct, expected):
+    from app.decision.engine import months_to_sell
+    assert months_to_sell(sales, 1, pct, default_config(velocity_min_monthly_sales=50)) == expected
+
+
 def test_single_seller_listing_rejected():
     inp = _velocity_base_input(est_monthly_sales=12, distinct_sellers_ever=1, max_new_offers_ever=1)
     result = score_deal(inp, default_config())
