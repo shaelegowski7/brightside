@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from . import discord_notifier, keepa_client, models, resolver, spapi_client
 from .config import get_settings
-from .decision.engine import DecisionConfig, ScoreInput, Verdict, score_deal
+from .decision.engine import DecisionConfig, Verdict, resolve_sell_price, score_deal
 from .matching import amazon_url, cache, jsonld, model_number, title_search_cache, title_validate
 from .pricing.fees import FeeProvider, SizeDims
 from .sources.base import RawDeal
@@ -206,9 +206,10 @@ def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_pr
     # passes -- that's the high-volume cheap screen; hitting SP-API's
     # rate-limited gating check there would be wasteful for deals stage 1
     # would reject anyway.
-    gated = spapi_client.check_gating(db, product.asin) if spapi_client.is_configured() else None
+    gate = spapi_client.check_gating_detail(db, product.asin) if spapi_client.is_configured() else None
+    gated = gate.gated if gate else None
 
-    score = _score_and_record(db, deal, product, stage2, decision_cfg, fee_provider, gated)
+    score = _score_and_record(db, deal, product, stage2, decision_cfg, fee_provider, gate)
     deal.status = "stage2_scored"
     db.commit()
 
@@ -385,46 +386,28 @@ def _score_and_record(
     stage2: "keepa_client.Stage2Result",
     decision_cfg: DecisionConfig,
     fee_provider: FeeProvider,
-    gated: bool | None,
+    gate: "spapi_client.GatingResult | None",
 ) -> models.Score:
     dims = None
     if stage2.package_weight_kg and stage2.package_longest_cm and stage2.package_dims_sum_cm:
         dims = SizeDims(stage2.package_weight_kg, stage2.package_longest_cm, stage2.package_dims_sum_cm)
-    price_for_fees = stage2.buybox_price_pence or stage2.lowest_fba_offer_pence or 0
+    price_for_fees, _ = resolve_sell_price(
+        stage2.buybox_price_pence, stage2.buybox_avg_90d_pence, stage2.lowest_fba_offer_pence)
     fees = fee_provider.get_fees(
-        stage2.category or "", price_for_fees, dims,
+        stage2.category or "", price_for_fees or 0, dims,
         stage2.fba_fulfilment_fee_pence, stage2.referral_fee_percentage,
         asin=product.asin,
     )
     oversize = fee_provider.classify_size_tier(dims) == "oversize"
+    category_rank_percentile, leaf_size = keepa_client.leaf_rank_stats(db, stage2)
 
-    category_rank_percentile = None
-    if stage2.leaf_category_id is not None and stage2.leaf_category_rank is not None:
-        category_size = keepa_client.get_category_size(db, stage2.leaf_category_id)
-        if category_size:
-            category_rank_percentile = stage2.leaf_category_rank / category_size
-
-    score_input = ScoreInput(
-        buy_price_pence=deal.buy_price,
-        match_confidence=product.confidence,
-        category=stage2.category or "",
-        fba_offer_count=stage2.fba_offer_count,
-        amazon_on_listing=stage2.amazon_on_listing,
-        fees=fees,
-        sales_rank=stage2.sales_rank,
-        est_monthly_sales=stage2.est_monthly_sales,
-        buybox_price_pence=stage2.buybox_price_pence,
-        lowest_fba_offer_pence=stage2.lowest_fba_offer_pence,
-        buybox_avg_90d_pence=stage2.buybox_avg_90d_pence,
-        rank_history_days=stage2.rank_history_days,
-        hazmat=stage2.hazmat,
-        oversize=oversize,
-        gated=gated,
-        category_rank_percentile=category_rank_percentile,
-        distinct_sellers_ever=stage2.distinct_sellers_ever,
-        max_new_offers_ever=stage2.max_new_offers_ever,
+    score_input = keepa_client.score_input_from_stage2(
+        stage2, buy_price_pence=deal.buy_price, fees=fees, oversize=oversize,
+        category_rank_percentile=category_rank_percentile, leaf_category_size=leaf_size,
+        gating_status=spapi_client.gating_status(gate), match_confidence=product.confidence,
     )
     result = score_deal(score_input, decision_cfg)
+    gated = gate.gated if gate else None
 
     score = models.Score(
         deal_id=deal.id,

@@ -31,33 +31,54 @@ def _cfg(**overrides) -> DecisionConfig:
 
 def test_target_price_is_the_tighter_of_roi_and_profit_constraints():
     cfg = _cfg()
-    # headroom = 2000 - 500 - 0 - 40 = 1460
+    # headroom = 2000 - (500 fees + 40 inbound) = 1460
     #   roi leg:    1460 / 1.30 = 1123
     #   profit leg: 1460 - 300  = 1160
     # -> roi is tighter here
-    assert target_buy_price_pence(2000, 500, 0, cfg) == 1123
+    assert target_buy_price_pence(2000, 540, cfg) == 1123
 
 
 def test_target_price_profit_constraint_binds_on_cheap_items():
     cfg = _cfg()
-    # headroom = 900 - 400 - 0 - 40 = 460
+    # headroom = 900 - 440 = 460
     #   roi leg:    460 / 1.30 = 353
     #   profit leg: 460 - 300  = 160
     # -> the flat £3 minimum bites much harder at low prices
-    assert target_buy_price_pence(900, 400, 0, cfg) == 160
+    assert target_buy_price_pence(900, 440, cfg) == 160
 
 
 def test_target_price_floors_at_zero_when_unachievable():
     cfg = _cfg()
-    # Fees alone exceed the sell price -- no purchase price clears this.
-    assert target_buy_price_pence(500, 600, 0, cfg) == 0
+    # Costs alone exceed the sell price -- no purchase price clears this.
+    assert target_buy_price_pence(500, 640, cfg) == 0
 
 
-def test_target_price_accounts_for_storage():
+def test_target_price_accounts_for_every_cost():
     cfg = _cfg()
-    without = target_buy_price_pence(2000, 500, 0, cfg)
-    with_storage = target_buy_price_pence(2000, 500, 200, cfg)
-    assert with_storage < without
+    assert target_buy_price_pence(2000, 740, cfg) < target_buy_price_pence(2000, 540, cfg)
+
+
+def test_target_price_passes_the_engine_with_every_new_cost_on():
+    """DSF, estimated-fee buffer, returns, prep, Q4 storage and a 50-unit
+    order all flow through cost_breakdown, so the quoted target must still
+    clear score_deal exactly."""
+    from dataclasses import replace
+    from app.decision.engine import cost_breakdown
+    cfg = _cfg(order_units=50, prep_cost_pence=20, digital_services_fee_pct=0.02,
+               estimated_fee_buffer_pct=0.15, default_returns_allowance_pct=0.02,
+               q4_months=frozenset({10, 11, 12}), velocity_min_monthly_sales=50)
+    inp = ScoreInput(
+        buy_price_pence=1, match_confidence="high", category="Toys & Games",
+        fba_offer_count=2, amazon_on_listing=False,
+        fees=FeeInput(referral_fee_pence=375, fba_fulfilment_fee_pence=300,
+                      monthly_storage_fee_pence=27, estimated=True, q4_monthly_storage_fee_pence=81),
+        sales_rank=1000, est_monthly_sales=100.0, buybox_price_pence=2500, start_month=11,
+    )
+    target = target_buy_price_pence(2500, cost_breakdown(inp, 2500, cfg)["non_buy_costs_pence"], cfg)
+    result = score_deal(replace(inp, buy_price_pence=target), cfg)
+    assert result.verdict.value in ("PASS", "PASS_WITH_FLAGS")
+    assert result.roi >= cfg.min_roi and result.net_profit_pence >= cfg.min_net_profit_pence
+    assert score_deal(replace(inp, buy_price_pence=target + 5), cfg).verdict.value == "REJECT"
 
 
 def test_target_price_result_actually_passes_the_real_engine():
@@ -66,7 +87,7 @@ def test_target_price_result_actually_passes_the_real_engine():
     formulas drifting apart."""
     cfg = _cfg()
     sell, fees_pence = 2500, 600
-    target = target_buy_price_pence(sell, fees_pence, 0, cfg)
+    target = target_buy_price_pence(sell, fees_pence + cfg.inbound_shipping_pence, cfg)
 
     result = score_deal(
         ScoreInput(

@@ -32,6 +32,7 @@ free. Used to avoid the SP-API getMyFeesEstimate cost/eligibility bar
 (Pro-seller developer registration + ongoing fee) for this one component;
 referral fee and gating still aren't SP-API-backed — see pricing/fees.py.
 """
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -43,7 +44,7 @@ from urllib3.exceptions import ProtocolError
 
 from . import models
 from .config import get_config, get_settings
-from .decision.engine import DecisionConfig
+from .decision.engine import DecisionConfig, FeeInput, ScoreInput
 from .pricing.fees import FeeProvider
 
 KEEPA_DOMAIN = "GB"   # Keepa's domain code for the UK marketplace — NOT "UK"
@@ -91,8 +92,14 @@ _IDX_NEW_FBA = 10
 _IDX_COUNT_NEW = 11
 _IDX_BUY_BOX_SHIPPING = 18
 _IDX_COUNT_NEW_FBA = 34
+_IDX_AMAZON = 0
+
+AMAZON_UK_SELLER_ID = "A3P5ROKL5A1OLE"
+_KEEPA_EPOCH = datetime(2011, 1, 1, tzinfo=timezone.utc)   # Keepa time = minutes since this
+_DAY_MINUTES = 24 * 60
 
 _client: "keepa.Keepa | None" = None
+_seller_name_cache: dict[str, tuple[str, ...]] = {}
 
 # keepa's own default is 10s, which a batched stage2_full sits right on top
 # of: a 50-ASIN offers=20 query measured ~10s against the live API
@@ -189,6 +196,97 @@ def _seller_history(product: dict) -> tuple[int | None, int | None]:
     return (len(ids) if ids else None), (max(counts) if counts else None)
 
 
+def _keepa_now() -> int:
+    return int((datetime.now(timezone.utc) - _KEEPA_EPOCH).total_seconds() // 60)
+
+
+def _value_at(history: list, at: int) -> int | None:
+    """Last value recorded at or before Keepa minute `at` in a flat
+    [time, value, ...] history; None if there was none or it was -1."""
+    value = None
+    for t, v in zip(history[0::2], history[1::2]):
+        if t > at:
+            break
+        value = v
+    return value if value is not None and value >= 0 else None
+
+
+def _time_weighted_avg(history: list, since: int, now: int) -> float | None:
+    """Mean of a flat [time, value, ...] history over [since, now], each value
+    weighted by how long it held. -1 (no data) spans are skipped."""
+    pairs = list(zip(history[0::2], history[1::2]))
+    total = weight = 0.0
+    for i, (t, v) in enumerate(pairs):
+        end = pairs[i + 1][0] if i + 1 < len(pairs) else now
+        start = max(t, since)
+        if end <= start or v is None or v < 0:
+            continue
+        total += v * (end - start)
+        weight += end - start
+    return total / weight if weight else None
+
+
+def _amazon_instock_pct_90(stats: dict) -> float | None:
+    """0-1 share of the last 90 days Amazon itself had stock. Keepa reports
+    the out-of-stock percentage per CsvType; index 0 is Amazon (checked live
+    2026-10-01: Emtrix 100 = never in stock, the LEGO 72036 set 16)."""
+    oos = (stats.get("outOfStockPercentage90") or [None])[_IDX_AMAZON]
+    return None if oos is None or oos < 0 else (100 - oos) / 100
+
+
+def _sellers_active_since(product: dict, since: int) -> int | None:
+    ids = {o["sellerId"] for o in (product.get("offers") or [])
+           if o.get("sellerId") and (o.get("lastSeen") or 0) >= since}
+    # Keepa sends this history as all strings, times included.
+    bb = product.get("buyBoxSellerIdHistory") or []
+    ids |= {s for t, s in zip(bb[0::2], bb[1::2])
+            if int(t) >= since and isinstance(s, str) and s and not s.startswith("-")}
+    return len(ids) if ids else None
+
+
+def _main_seller_id(product: dict) -> str | None:
+    """Current buy-box holder, else the most recent one on record."""
+    current = (product.get("stats") or {}).get("buyBoxSellerId")
+    if isinstance(current, str) and current and not current.startswith("-"):
+        return current
+    bb = product.get("buyBoxSellerIdHistory") or []
+    return next((s for s in reversed(bb[1::2])
+                 if isinstance(s, str) and s and not s.startswith("-")), None)
+
+
+def _norm(text: str | None) -> str:
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def _brand_matches_seller(brand: str | None, seller_names: tuple[str, ...]) -> bool | None:
+    """True when the brand is selling its own listing ("Nespresso" vs
+    "Nespresso UK Ltd", checked live 2026-10-01). None when either side is
+    unknown or the brand is too short to compare safely."""
+    b = _norm(brand)
+    names = [n for n in map(_norm, seller_names) if len(n) >= 3]
+    if len(b) < 3 or not names:
+        return None
+    return any(b in n or n in b for n in names)
+
+
+def _lookup_seller_names(db: Session, client, seller_ids: set[str]) -> None:
+    """Fills _seller_name_cache (~1 token per new seller). A failed lookup
+    leaves the warning unknown rather than failing the batch."""
+    missing = sorted(seller_ids - _seller_name_cache.keys() - {AMAZON_UK_SELLER_ID})
+    if not missing:
+        return
+    tokens_before = client.tokens_left
+    try:
+        sellers = client.seller_query(missing, domain=KEEPA_DOMAIN, wait=True) or {}
+    except Exception as e:
+        print(f"[KEEPA] seller lookup failed ({type(e).__name__}: {e})")
+        return
+    _log_tokens(db, "seller_lookup", len(missing), tokens_before, client.tokens_left)
+    for sid in missing:
+        info = sellers.get(sid) or {}
+        _seller_name_cache[sid] = tuple(n for n in (info.get("sellerName"), info.get("businessName")) if n)
+
+
 def _referral_fee_percentage(product: dict) -> float | None:
     # Percentage points (e.g. 13.0 == 13%), NOT a 0-1 fraction — confirmed
     # live 2026-07-23 against B00HER8E5A (referralFeePercentage: 13.0).
@@ -274,6 +372,14 @@ class Stage2Result:
     est_monthly_sales_source: str | None = None   # "keepa_confirmed" (real monthlySold badge) or None; kept so stored rows distinguish from pre-2026-10-01 "rank_drop_proxy" ones
     distinct_sellers_ever: int | None = None   # see _seller_history
     max_new_offers_ever: int | None = None
+    sales_rank_avg90: int | None = None
+    leaf_rank_avg90: int | None = None   # time-weighted, within leaf_category_id
+    buybox_avg_30d_pence: int | None = None
+    amazon_instock_pct_90: float | None = None   # 0-1, see _amazon_instock_pct_90
+    fba_offer_count_30d_ago: int | None = None
+    sellers_active_90d: int | None = None
+    brand_matches_main_seller: bool | None = None
+    is_variation: bool = False
 
 
 def stage1_screen(db: Session, codes: list[str], is_ean: bool) -> dict[str, Stage1Result]:
@@ -408,7 +514,9 @@ def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
         wait=True,
     )
     _log_tokens(db, "stage2_full", len(asins), tokens_before, client.tokens_left)
+    _lookup_seller_names(db, client, {s for s in map(_main_seller_id, products) if s})
 
+    now = _keepa_now()
     results: dict[str, Stage2Result] = {}
     for product in products:
         asin = product.get("asin")
@@ -417,6 +525,7 @@ def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
         stats = product.get("stats") or {}
         current = stats.get("current")
         avg90 = stats.get("avg90")
+        csv = product.get("csv") or []
 
         buybox_price = stats.get("buyBoxPrice")
         if buybox_price is not None and buybox_price < 0:   # -2 = no buy box
@@ -428,7 +537,11 @@ def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
         buybox_avg_90d = _csv_value(avg90, _IDX_BUY_BOX_SHIPPING)
 
         # Badge only -- see the velocity gate in decision/engine.py for why
-        # salesRankDrops30 is no longer used as a fallback.
+        # salesRankDrops30 is no longer used as a fallback. Kept on
+        # variation children too: it's per child, not the parent's total
+        # (checked live 2026-10-01: in all 13 families with 2+ badged
+        # siblings the figures differed, e.g. Laura Geller shades 50-600).
+        parent_asin = product.get("parentAsin")
         monthly_sold = product.get("monthlySold")
         est_monthly_sales = float(monthly_sold) if monthly_sold else None
         est_monthly_sales_source = "keepa_confirmed" if monthly_sold else None
@@ -437,6 +550,14 @@ def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
         dims_mm = [d for d in (product.get(k) for k in ("packageHeight", "packageLength", "packageWidth")) if d]
         leaf_cat_id, leaf_rank = _leaf_category(product)
         distinct_sellers_ever, max_new_offers_ever = _seller_history(product)
+
+        since_90d = now - 90 * _DAY_MINUTES
+        leaf_history = (product.get("salesRanks") or {}).get(str(leaf_cat_id)) if leaf_cat_id else None
+        leaf_rank_avg90 = _time_weighted_avg(leaf_history, since_90d, now) if leaf_history else None
+        sales_rank_avg90 = _csv_value(avg90, _IDX_SALES_RANK)
+        buybox_avg_30d = _csv_value(stats.get("avg30"), _IDX_BUY_BOX_SHIPPING)
+        fba_history = csv[_IDX_COUNT_NEW_FBA] if len(csv) > _IDX_COUNT_NEW_FBA and csv[_IDX_COUNT_NEW_FBA] else []
+        main_seller = _main_seller_id(product)
 
         results[asin] = Stage2Result(
             asin=asin,
@@ -461,8 +582,65 @@ def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
             leaf_category_rank=leaf_rank,
             distinct_sellers_ever=distinct_sellers_ever,
             max_new_offers_ever=max_new_offers_ever,
+            sales_rank_avg90=int(sales_rank_avg90) if sales_rank_avg90 is not None else None,
+            leaf_rank_avg90=round(leaf_rank_avg90) if leaf_rank_avg90 is not None else None,
+            buybox_avg_30d_pence=int(buybox_avg_30d) if buybox_avg_30d is not None else None,
+            amazon_instock_pct_90=_amazon_instock_pct_90(stats),
+            fba_offer_count_30d_ago=_value_at(fba_history, now - 30 * _DAY_MINUTES) if fba_history else None,
+            sellers_active_90d=_sellers_active_since(product, since_90d),
+            brand_matches_main_seller=_brand_matches_seller(
+                product.get("brand"), _seller_name_cache.get(main_seller, ())) if main_seller else None,
+            is_variation=bool(parent_asin),
         )
     return results
+
+
+def leaf_rank_stats(db: Session, stage2: Stage2Result) -> tuple[float | None, int | None]:
+    """(90-day average leaf rank / leaf category size, leaf category size)
+    for the velocity gate. Falls back to the current leaf rank when there's
+    no 90-day history."""
+    rank = stage2.leaf_rank_avg90 if stage2.leaf_rank_avg90 is not None else stage2.leaf_category_rank
+    if stage2.leaf_category_id is None or rank is None:
+        return None, None
+    size = get_category_size(db, stage2.leaf_category_id)
+    return (rank / size if size else None), size
+
+
+def score_input_from_stage2(
+    stage2: Stage2Result, *, buy_price_pence: int, fees: FeeInput, oversize: bool,
+    category_rank_percentile: float | None, leaf_category_size: int | None,
+    gating_status: str | None, match_confidence: str = "high",
+) -> ScoreInput:
+    """The one place a Keepa result becomes engine input, so no scan tool
+    can miss a field the engine rules on."""
+    return ScoreInput(
+        buy_price_pence=buy_price_pence,
+        match_confidence=match_confidence,
+        category=stage2.category or "",
+        fba_offer_count=stage2.fba_offer_count,
+        amazon_on_listing=stage2.amazon_on_listing,
+        fees=fees,
+        sales_rank=stage2.sales_rank,
+        sales_rank_avg90=stage2.sales_rank_avg90,
+        est_monthly_sales=stage2.est_monthly_sales,
+        buybox_price_pence=stage2.buybox_price_pence,
+        lowest_fba_offer_pence=stage2.lowest_fba_offer_pence,
+        buybox_avg_90d_pence=stage2.buybox_avg_90d_pence,
+        buybox_avg_30d_pence=stage2.buybox_avg_30d_pence,
+        rank_history_days=stage2.rank_history_days,
+        hazmat=stage2.hazmat,
+        oversize=oversize,
+        gating_status=gating_status,
+        category_rank_percentile=category_rank_percentile,
+        leaf_category_size=leaf_category_size,
+        distinct_sellers_ever=stage2.distinct_sellers_ever,
+        max_new_offers_ever=stage2.max_new_offers_ever,
+        amazon_instock_pct_90=stage2.amazon_instock_pct_90,
+        fba_offer_count_30d_ago=stage2.fba_offer_count_30d_ago,
+        sellers_active_90d=stage2.sellers_active_90d,
+        brand_matches_main_seller=stage2.brand_matches_main_seller,
+        is_variation=stage2.is_variation,
+    )
 
 
 def get_category_size(db: Session, cat_id: int) -> int | None:

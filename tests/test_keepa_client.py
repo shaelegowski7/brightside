@@ -12,12 +12,16 @@ from app import keepa_client
 
 
 class _FakeKeepaClient:
-    def __init__(self, products: list[dict]):
+    def __init__(self, products: list[dict], sellers: dict | None = None):
         self.tokens_left = 100
         self._products = products
+        self._sellers = sellers or {}
 
     def query(self, *args, **kwargs):
         return self._products
+
+    def seller_query(self, ids, **kwargs):
+        return {i: self._sellers[i] for i in ids if i in self._sellers}
 
 
 def _product(asin: str = "B0TEST0001", offers: list[dict] | None = None, buy_box_is_amazon: bool = False) -> dict:
@@ -94,7 +98,7 @@ def _count_new_csv(counts: list[int]) -> list:
 
 def test_seller_history_single_seller_listing(db_session, monkeypatch):
     product = _product(offers=[{"sellerId": "BRANDOWNER", "condition": 1}])
-    product["buyBoxSellerIdHistory"] = [1000, "BRANDOWNER", 2000, "-1", 3000, "BRANDOWNER"]
+    product["buyBoxSellerIdHistory"] = ["1000", "BRANDOWNER", "2000", "-1", "3000", "BRANDOWNER"]   # all strings, as Keepa sends it
     product["csv"] = _count_new_csv([1, 0, 1])
     monkeypatch.setattr(keepa_client, "_get_client", lambda: _FakeKeepaClient([product]))
 
@@ -105,7 +109,7 @@ def test_seller_history_single_seller_listing(db_session, monkeypatch):
 
 def test_seller_history_unions_offers_and_buybox_history(db_session, monkeypatch):
     product = _product(offers=[{"sellerId": "A", "condition": 1}])
-    product["buyBoxSellerIdHistory"] = [1000, "B", 2000, "C"]
+    product["buyBoxSellerIdHistory"] = ["1000", "B", "2000", "C"]
     product["csv"] = _count_new_csv([1, 3, 2])
     monkeypatch.setattr(keepa_client, "_get_client", lambda: _FakeKeepaClient([product]))
 
@@ -141,6 +145,50 @@ def test_monthly_sold_badge_is_the_sales_figure(db_session, monkeypatch):
     r = keepa_client.stage2_full(db_session, ["B0TEST0001"])["B0TEST0001"]
 
     assert (r.est_monthly_sales, r.est_monthly_sales_source) == (200.0, "keepa_confirmed")
+
+
+def _stage2_of(db_session, monkeypatch, product, sellers=None):
+    keepa_client._seller_name_cache.clear()
+    monkeypatch.setattr(keepa_client, "_get_client", lambda: _FakeKeepaClient([product], sellers))
+    return keepa_client.stage2_full(db_session, [product["asin"]])[product["asin"]]
+
+
+def test_variation_child_keeps_its_own_badge(db_session, monkeypatch):
+    product = _product()
+    product.update(monthlySold=400, parentAsin="B0PARENT01")
+    r = _stage2_of(db_session, monkeypatch, product)
+    assert (r.est_monthly_sales, r.est_monthly_sales_source, r.is_variation) == (400.0, "keepa_confirmed", True)
+
+
+def test_amazon_instock_share_from_out_of_stock_pct(db_session, monkeypatch):
+    product = _product()
+    product["stats"]["outOfStockPercentage90"] = [16, 0]   # LEGO 72036, live 2026-10-01
+    assert _stage2_of(db_session, monkeypatch, product).amazon_instock_pct_90 == pytest.approx(0.84)
+
+
+def test_fba_count_30_days_ago_and_leaf_rank_90_day_average(db_session, monkeypatch):
+    now, day = keepa_client._keepa_now(), keepa_client._DAY_MINUTES
+    product = _product()
+    csv: list = [None] * 35
+    csv[keepa_client._IDX_COUNT_NEW_FBA] = [now - 60 * day, 2, now - 10 * day, 5]
+    product["csv"] = csv
+    # rank 1000 for the first 60 of the last 90 days, then 4000 for 30: avg 2000
+    product["categoryTree"] = [{"catId": 1, "name": "Toys & Games"}, {"catId": 2, "name": "Building Sets"}]
+    product["salesRanks"] = {"2": [now - 200 * day, 1000, now - 30 * day, 4000]}
+    r = _stage2_of(db_session, monkeypatch, product)
+    assert r.fba_offer_count_30d_ago == 2
+    assert r.leaf_rank_avg90 == 2000
+
+
+def test_brand_matching_the_buybox_seller(db_session, monkeypatch):
+    product = _product()
+    product["brand"] = "Nespresso"
+    product["stats"]["buyBoxSellerId"] = "A364RD88VFRM3J"
+    r = _stage2_of(db_session, monkeypatch, product, {"A364RD88VFRM3J": {"sellerName": "Nespresso UK Ltd"}})
+    assert r.brand_matches_main_seller is True
+    product["brand"] = "Emtrix"
+    r = _stage2_of(db_session, monkeypatch, product, {"A364RD88VFRM3J": {"sellerName": "Footcare UK"}})
+    assert r.brand_matches_main_seller is False
 
 
 class _FlakyClient:

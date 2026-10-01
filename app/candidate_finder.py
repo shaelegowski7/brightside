@@ -36,12 +36,12 @@ min_buybox_pence exists to stop spending tokens down there.
 """
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from sqlalchemy.orm import Session
 
 from . import keepa_client, models, spapi_client
-from .decision.engine import DecisionConfig, months_to_sell
+from .decision.engine import DecisionConfig, Verdict, cost_breakdown, resolve_sell_price, score_deal
 from .pricing.fees import FeeProvider, SizeDims
 
 # Sorting the finder by best rank surfaces category megasellers, which in
@@ -97,26 +97,27 @@ class Candidate:
 
 def target_buy_price_pence(
     sell_price_pence: int,
-    total_fees_pence: int,
-    storage_cost_pence: int,
+    non_buy_costs_pence: int,
     cfg: DecisionConfig,
 ) -> int:
     """Inverts decision/engine.py's scoring maths: the highest buy price
     that still clears BOTH min_roi and min_net_profit_pence. Kept as a
     pure function so it can be tested against the engine's own formula
-    without any Keepa/DB involvement.
+    without any Keepa/DB involvement. `non_buy_costs_pence` is
+    engine.cost_breakdown's figure, so every cost line scoring charges
+    is in here too.
 
-        net_profit = sell - fees - storage - inbound - buy
+        net_profit = sell - non_buy_costs - buy
         roi        = net_profit / buy
 
     Solving each constraint for buy:
         roi >= min_roi          ->  buy <= headroom / (1 + min_roi)
         net_profit >= min_prof  ->  buy <= headroom - min_prof
 
-    where headroom = sell - fees - storage - inbound. Returns the tighter
-    of the two, floored at 0 (a negative result means the product can't
-    clear the thresholds at any purchase price, not even free)."""
-    headroom = sell_price_pence - total_fees_pence - storage_cost_pence - cfg.inbound_shipping_pence
+    where headroom = sell - non_buy_costs. Returns the tighter of the two,
+    floored at 0 (a negative result means the product can't clear the
+    thresholds at any purchase price, not even free)."""
+    headroom = sell_price_pence - non_buy_costs_pence
     max_buy_for_roi = headroom / (1 + cfg.min_roi)
     max_buy_for_profit = headroom - cfg.min_net_profit_pence
     return max(0, int(min(max_buy_for_roi, max_buy_for_profit)))
@@ -345,48 +346,47 @@ def score_asins(
         dims = None
         if stage2.package_weight_kg and stage2.package_longest_cm and stage2.package_dims_sum_cm:
             dims = SizeDims(stage2.package_weight_kg, stage2.package_longest_cm, stage2.package_dims_sum_cm)
-        if fee_provider.classify_size_tier(dims) == "oversize" and cfg.reject_oversize:
+        oversize = fee_provider.classify_size_tier(dims) == "oversize"
+        if oversize and cfg.reject_oversize:
             continue
 
+        sell_price, _ = resolve_sell_price(
+            stage2.buybox_price_pence, stage2.buybox_avg_90d_pence, stage2.lowest_fba_offer_pence)
         fees = fee_provider.get_fees(
-            stage2.category or "", stage2.buybox_price_pence, dims,
+            stage2.category or "", sell_price, dims,
             stage2.fba_fulfilment_fee_pence, stage2.referral_fee_percentage, asin=asin,
         )
-        fee_vat_mult = 1.0 if cfg.vat_registered else 1.20
-        total_fees = round((fees.referral_fee_pence + fees.fba_fulfilment_fee_pence) * fee_vat_mult)
 
-        # Finder results always carry a monthlySold badge (monthlySold_gte),
-        # so the rank-percentile fallback never applies here.
-        est_months_to_sell = months_to_sell(stage2.est_monthly_sales, stage2.fba_offer_count, None, cfg)
-        storage_cost = round(fees.monthly_storage_fee_pence * est_months_to_sell)
-
-        target = target_buy_price_pence(stage2.buybox_price_pence, total_fees, storage_cost, cfg)
-        if target <= 0:
-            continue
-
-        # Last, because it's the only check that costs a network call.
-        #
-        # Only NOT_ELIGIBLE excludes. This used to drop everything gated,
-        # which threw away most of the list: 39 of 50 in the 2026-08-29 run
-        # were recorded gated, and that measurement came from a bool parser
-        # that could not tell APPROVAL_REQUIRED from NOT_ELIGIBLE. Checked
-        # properly on 2026-09-06, all 22 wholesale candidates split 15 open
-        # / 7 APPROVAL_REQUIRED / 0 NOT_ELIGIBLE -- nothing was actually
-        # shut. APPROVAL_REQUIRED wants a qualifying trade invoice, which is
-        # the one document wholesale sourcing produces as a side effect, so
-        # for a *sourcing shortlist* it is a paperwork step, not a
-        # disqualification. It is kept and marked, and the caller decides.
+        # Only NOT_ELIGIBLE excludes (the engine rejects it). This used to
+        # drop everything gated, which threw away most of the list: 39 of 50
+        # in the 2026-08-29 run were recorded gated, and that measurement
+        # came from a bool parser that could not tell APPROVAL_REQUIRED from
+        # NOT_ELIGIBLE. Checked properly on 2026-09-06, all 22 wholesale
+        # candidates split 15 open / 7 APPROVAL_REQUIRED / 0 NOT_ELIGIBLE --
+        # nothing was actually shut. APPROVAL_REQUIRED wants a qualifying
+        # trade invoice, which is the one document wholesale sourcing
+        # produces as a side effect, so it is kept and marked.
         #
         # None still means unknown, never gated: SP-API being unreachable
         # must not silently empty the list. Same convention as engine.py.
-        gating_note = None
+        gate = None
         if check_gating:
             time.sleep(_GATING_DELAY_S)
             gate = spapi_client.check_gating_detail(db, asin)
-            if gate is not None and gate.gated:
-                if gate.reason_code and "NOT_ELIGIBLE" in gate.reason_code:
-                    continue
-                gating_note = gate.reason_code or "GATED"
+
+        category_rank_percentile, leaf_size = keepa_client.leaf_rank_stats(db, stage2)
+        inp = keepa_client.score_input_from_stage2(
+            stage2, buy_price_pence=1, fees=fees, oversize=oversize,
+            category_rank_percentile=category_rank_percentile, leaf_category_size=leaf_size,
+            gating_status=spapi_client.gating_status(gate),
+        )
+        target = target_buy_price_pence(sell_price, cost_breakdown(inp, sell_price, cfg)["non_buy_costs_pence"], cfg)
+        if target <= 0:
+            continue
+        # Every other hard rule, at the price we'd actually pay.
+        if score_deal(replace(inp, buy_price_pence=target), cfg).verdict == Verdict.REJECT:
+            continue
+        gating_note = (gate.reason_code or "GATED") if gate is not None and gate.gated else None
 
         candidates.append(Candidate(
             asin=asin,

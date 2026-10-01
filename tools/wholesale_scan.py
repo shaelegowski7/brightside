@@ -74,7 +74,7 @@ _fix_railway_internal_db_url()   # MUST precede app.database's import-time engin
 from app import keepa_client, scan_store, spapi_client
 from app.config import get_config
 from app.database import SessionLocal
-from app.decision.engine import DecisionConfig, ScoreInput, Verdict, score_deal
+from app.decision.engine import DecisionConfig, Verdict, resolve_sell_price, score_deal
 from app.keepa_client import (
     KEEPA_DOMAIN,
     _IDX_BUY_BOX_SHIPPING,
@@ -364,17 +364,19 @@ def _run_scan(source_name: str, rows: list[FeedRow]) -> None:
                 dims = None
                 if stage2.package_weight_kg and stage2.package_longest_cm and stage2.package_dims_sum_cm:
                     dims = SizeDims(stage2.package_weight_kg, stage2.package_longest_cm, stage2.package_dims_sum_cm)
+                sell_price, _ = resolve_sell_price(
+                    stage2.buybox_price_pence, stage2.buybox_avg_90d_pence, stage2.lowest_fba_offer_pence)
                 fees = fee_provider.get_fees(
-                    stage2.category or "", stage2.buybox_price_pence or stage2.lowest_fba_offer_pence or 0, dims,
+                    stage2.category or "", sell_price or 0, dims,
                     stage2.fba_fulfilment_fee_pence, stage2.referral_fee_percentage, asin=asin,
                 )
                 oversize = fee_provider.classify_size_tier(dims) == "oversize"
+                category_rank_percentile, leaf_size = keepa_client.leaf_rank_stats(db, stage2)
 
-                category_rank_percentile = None
-                if stage2.leaf_category_id is not None and stage2.leaf_category_rank is not None:
-                    category_size = keepa_client.get_category_size(db, stage2.leaf_category_id)
-                    if category_size:
-                        category_rank_percentile = stage2.leaf_category_rank / category_size
+                gating_status = None
+                if check_gating:
+                    time.sleep(_GATING_DELAY_S)
+                    gating_status = spapi_client.gating_status(spapi_client.check_gating_detail(db, asin))
 
                 # --- pack size: price what the ASIN actually sells ---
                 # The feed sells one unit; the ASIN may be a multipack. Buying
@@ -389,25 +391,11 @@ def _run_scan(source_name: str, rows: list[FeedRow]) -> None:
                 asin_mult = _pack_multiplier(stage2.title)
                 units_per_sale = _bundle_units(feed_mult, asin_mult)
 
-                score_input = ScoreInput(
-                    buy_price_pence=row.buy_price_pence * units_per_sale,
-                    match_confidence="high",   # EAN match, same confidence tier as jsonld in pipeline.py
-                    category=stage2.category or "",
-                    fba_offer_count=stage2.fba_offer_count,
-                    amazon_on_listing=stage2.amazon_on_listing,
-                    fees=fees,
-                    sales_rank=stage2.sales_rank,
-                    est_monthly_sales=stage2.est_monthly_sales,
-                    buybox_price_pence=stage2.buybox_price_pence,
-                    lowest_fba_offer_pence=stage2.lowest_fba_offer_pence,
-                    buybox_avg_90d_pence=stage2.buybox_avg_90d_pence,
-                    rank_history_days=stage2.rank_history_days,
-                    hazmat=stage2.hazmat,
-                    oversize=oversize,
-                    gated=None,   # checked separately below, reported not filtered
-                    category_rank_percentile=category_rank_percentile,
-                    distinct_sellers_ever=stage2.distinct_sellers_ever,
-                    max_new_offers_ever=stage2.max_new_offers_ever,
+                # EAN match, same confidence tier as jsonld in pipeline.py
+                score_input = keepa_client.score_input_from_stage2(
+                    stage2, buy_price_pence=row.buy_price_pence * units_per_sale, fees=fees,
+                    oversize=oversize, category_rank_percentile=category_rank_percentile,
+                    leaf_category_size=leaf_size, gating_status=gating_status,
                 )
                 result = score_deal(score_input, cfg)
                 flags = list(result.flags)
@@ -420,8 +408,8 @@ def _run_scan(source_name: str, rows: list[FeedRow]) -> None:
                     flags.append(
                         f"requires_bundling: {units_per_sale} units per sale "
                         f"(Amazon title {stage2.title!r} implies x{asin_mult}, feed unit implies "
-                        f"x{feed_mult}) -- costed at {units_per_sale}x, and needs prep "
-                        "(poly-bag, label, suffocation warning) not priced in here"
+                        f"x{feed_mult}) -- costed at {units_per_sale}x; bundling prep "
+                        "(poly-bag, suffocation warning) beyond decision.prep_cost_pence isn't priced in"
                     )
                 elif asin_mult != feed_mult:
                     flags.append(
@@ -445,6 +433,8 @@ def _run_scan(source_name: str, rows: list[FeedRow]) -> None:
                     # figures from older rank_drop_proxy checkpoints.
                     "est_monthly_sales": stage2.est_monthly_sales,
                     "est_monthly_sales_source": stage2.est_monthly_sales_source,
+                    "velocity_basis": result.velocity_basis,
+                    "gating_status": gating_status,
                     "verdict": result.verdict.value, "verdict_reason": result.verdict_reason, "flags": flags,
                 }
                 ckpt.write(json.dumps(entry) + "\n")

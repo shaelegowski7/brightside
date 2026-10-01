@@ -216,7 +216,7 @@ def test_scan_succeeds_with_auth(monkeypatch):
     })
     monkeypatch.setattr("app.discord_notifier.send_ping", lambda url, embed: True)
 
-    resp = client.post("/scan", json={"ean": "5901234123457", "buy_price": 1000}, headers=AUTH_HEADERS)
+    resp = client.post("/scan", json={"ean": "5901234123457", "buy_price": 800}, headers=AUTH_HEADERS)
 
     assert resp.status_code == 200
     body = resp.json()

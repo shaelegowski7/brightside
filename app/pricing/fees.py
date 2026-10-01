@@ -53,6 +53,7 @@ class FeeTableProvider(FeeProvider):
         self._category_referral_pct = fees_cfg["category_referral_pct"]
         self._fba_fee_by_tier = fees_cfg["fba_fee_by_size_tier_pence"]
         self._storage_fee_by_tier = fees_cfg["monthly_storage_fee_pence"]
+        self._q4_storage_fee_by_tier = fees_cfg.get("monthly_storage_fee_pence_q4") or self._storage_fee_by_tier
         self._size_thresholds = fees_cfg["size_tier_thresholds_cm_kg"]
 
     def classify_size_tier(self, dims: SizeDims | None) -> str:
@@ -104,6 +105,7 @@ class FeeTableProvider(FeeProvider):
             fba_fulfilment_fee_pence=fulfilment_fee_pence,
             monthly_storage_fee_pence=self._storage_fee_by_tier[storage_key],
             estimated=referral_estimated or fulfilment_estimated,
+            q4_monthly_storage_fee_pence=self._q4_storage_fee_by_tier[storage_key],
         )
 
 
@@ -146,6 +148,7 @@ class SpApiFeeProvider(FeeProvider):
             fba_fulfilment_fee_pence=result.fba_fulfilment_fee_pence,
             monthly_storage_fee_pence=fallback_fees.monthly_storage_fee_pence,
             estimated=False,
+            q4_monthly_storage_fee_pence=fallback_fees.q4_monthly_storage_fee_pence,
         )
 
 
