@@ -53,6 +53,21 @@ def test_amazon_on_listing_true_when_amazon_offer_present_but_not_buybox_winner(
     assert results["B0TEST0001"].amazon_on_listing is True
 
 
+def test_amazon_on_listing_ignores_a_dead_amazon_offer(db_session, monkeypatch):
+    """B000T8Z6QQ: Amazon's offer was still in the array two months after it
+    sold out, but not in liveOffersOrder."""
+    product = _product(offers=[
+        {"sellerId": "AMAZON", "isAmazon": True, "isFBA": True, "condition": 1},
+        {"sellerId": "THIRD_PARTY", "isAmazon": False, "condition": 1},
+    ])
+    product["liveOffersOrder"] = [1]
+    monkeypatch.setattr(keepa_client, "_get_client", lambda: _FakeKeepaClient([product]))
+    assert keepa_client.stage2_full(db_session, ["B0TEST0001"])["B0TEST0001"].amazon_on_listing is False
+
+    product["liveOffersOrder"] = [0, 1]
+    assert keepa_client.stage2_full(db_session, ["B0TEST0001"])["B0TEST0001"].amazon_on_listing is True
+
+
 def test_amazon_on_listing_false_when_no_amazon_offer(db_session, monkeypatch):
     product = _product(offers=[
         {"sellerId": "THIRD_PARTY", "isAmazon": False, "condition": 1},

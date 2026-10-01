@@ -156,11 +156,16 @@ def _amazon_has_new_offer(product: dict) -> bool:
     or not (condition==1 per Keepa's offer schema; confirmed live 2026-07-28
     against B0BXX8X7DM alongside a used-condition 3rd-party offer at
     condition==2, matching Keepa's documented New/Used-LikeNew/... ordering).
-    See the module docstring for why this replaced stats.buyBoxIsAmazon."""
-    return any(
-        o.get("isAmazon") and o.get("condition") == 1
-        for o in (product.get("offers") or [])
-    )
+    See the module docstring for why this replaced stats.buyBoxIsAmazon.
+
+    Only offers listed in liveOffersOrder count: Keepa keeps dead offers in
+    the array, and B000T8Z6QQ was wrongly rejected on an Amazon offer last
+    seen two months earlier (checked live 2026-10-01). Payloads without
+    liveOffersOrder fall back to every offer."""
+    offers = product.get("offers") or []
+    live = product.get("liveOffersOrder")
+    candidates = [offers[i] for i in live if 0 <= i < len(offers)] if live is not None else offers
+    return any(o.get("isAmazon") and o.get("condition") == 1 for o in candidates)
 
 
 def _fba_fulfilment_fee_pence(product: dict) -> int | None:
