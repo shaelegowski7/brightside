@@ -74,8 +74,8 @@ def test_run_scan_pass_returns_full_verdict(db_session, monkeypatch):
 
     assert result["verdict"] == "PASS_WITH_FLAGS"
     assert result["asin"] == "B000SCAN"
-    assert result["net_profit_pence"] == 599
-    assert result["roi"] == 0.599
+    assert result["net_profit_pence"] == 517
+    assert result["roi"] == 0.517
     assert result["posted_to_discord"] is True
     assert result["keepa_url"] == "https://keepa.com/#!product/2-B000SCAN"
     assert len(sent) == 1
@@ -101,7 +101,7 @@ def test_run_scan_second_scan_within_cooldown_not_posted_to_discord(db_session, 
     assert first["posted_to_discord"] is True
     # still a full verdict on the second scan -- just not re-posted
     assert second["verdict"] == "PASS_WITH_FLAGS"
-    assert second["net_profit_pence"] == 599
+    assert second["net_profit_pence"] == 517
     assert second["posted_to_discord"] is False
     assert len(sent) == 1   # only the first scan actually posted
 

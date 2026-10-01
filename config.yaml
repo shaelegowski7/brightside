@@ -20,6 +20,13 @@ thresholds:
   # uses each item's own fees and buy price, so it needs no guess.
   min_sell_price_pence: 0
   max_fba_offers: 6            # hard-reject above this offer count
+  # Reject when Amazon itself had stock for more than this share of the
+  # last 90 days (Keepa outOfStockPercentage90, Amazon slot) -- it will be
+  # back. Any stock at all in that window is a warning.
+  max_amazon_instock_pct_90: 0.25
+  # monthlySold / (FBA sellers + 1, i.e. us) must be at least this: our
+  # share of sales has to be worth an order.
+  min_monthly_sales_per_seller: 8
   rank_history_min_days: 90    # soft flag "<90 days of rank history" below this
   price_spike_pct: 0.20        # soft flag if buy box >20% above 90-day average
   cooldown_hours: 24           # don't re-ping same ASIN within this window...
@@ -122,6 +129,33 @@ hukd:
 
 decision:
   inbound_shipping_pence: 40   # spec default £0.40/unit
+  # Units in a typical order. Storage months = order_units / our share of
+  # monthly sales (monthlySold / (FBA sellers + 1)), clamped to 1-6.
+  order_units: 50
+  # Per-unit prep (label, poly-bag). Working estimate agreed 2026-10-01
+  # until the prep route (self-prep, Amazon label service, prep centre) is chosen.
+  prep_cost_pence: 20
+  # Amazon UK's Digital Services Fee on its seller fees; VAT applies on top.
+  digital_services_fee_pct: 0.02
+  # Extra on referral + fulfilment when either came from the config fee
+  # table rather than Keepa's real per-ASIN figure.
+  estimated_fee_buffer_pct: 0.15
+  # Share of the sell price lost to returns. PLACEHOLDERS -- calibrate
+  # against real return rates once there's sales history.
+  returns_allowance_pct:
+    default: 0.02
+    "Electronics": 0.05
+    "Computers & Accessories": 0.05
+    "PC": 0.05
+    "Fashion": 0.10
+  # Months billed at fees.monthly_storage_fee_pence_q4.
+  q4_storage_months: [10, 11, 12]
+
+# Warnings on a pass (never rejects).
+warnings:
+  fba_offer_growth_pct: 0.50   # FBA sellers up more than this in 30 days
+  price_downtrend_pct: 0.10    # 30-day avg buy box this far below the 90-day avg
+  expiry_dated_categories: ["Grocery", "Health & Personal Care", "Beauty"]
 
 # Reject a scraped/parsed buy price that's implausibly low vs the retailer
 # page's own listed price — catches regex/parse mis-fires (e.g. "£1.00
@@ -147,8 +181,13 @@ velocity:
   # under that never came from confirmed data, only from the rank-drop proxy
   # that overestimated the coconut lamp and shamanic drum ~10x.
   min_monthly_sales: 50
+  # Applied to the 90-day average leaf-category rank.
   top_category_percentile: 0.02
   category_size_cache_ttl_days: 30
+  # In a leaf category this small, top 2% is too easy (rank 60 of 3,000),
+  # so when enabled the category rank cap is used instead.
+  small_subcategory_min_items: 5000
+  small_subcategory_use_rank_cap: false
 
 # Reverse candidate search -- ask Keepa for products that already clear
 # every structural gate, then work out what we'd have to source them at.
@@ -751,6 +790,16 @@ fees:
   monthly_storage_fee_pence:
     standard: 27
     oversize: 60
+  # Oct-Dec rate (decision.q4_storage_months): the per-unit rates above
+  # scaled by Amazon UK's own Q4 uplift per cubic foot, from Seller
+  # Central's "Monthly storage fees" page (rates effective 2026-02-01,
+  # non-dangerous goods): standard-size outside clothing/shoes/bags
+  # £0.76 -> £1.51 (x1.99), oversize £0.55 -> £0.87 (x1.58). Clothing etc.
+  # is lower (£0.62 -> £0.82) but isn't split out here. The storage
+  # utilisation surcharge doesn't apply until 365 days after first shipment.
+  monthly_storage_fee_pence_q4:
+    standard: 54
+    oversize: 95
   # Simplified UK FBA size-tier breakpoints (max dimension in cm, max weight
   # in kg). First tier a product fits under (in this order) wins.
   size_tier_thresholds_cm_kg:

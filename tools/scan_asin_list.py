@@ -54,6 +54,7 @@ import os
 import re
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -120,21 +121,23 @@ def parse_input(args: list[str], default_price_pence: int | None) -> list[tuple[
     return rows
 
 
-def _format_entry(asin, stage2, name, buy_price_pence, result, cfg, total_fees,
-                  storage_cost, est_months_to_sell, sell_price, target,
-                  category_rank_percentile, gated) -> str:
+def _format_entry(asin, stage2, name, buy_price_pence, result, cfg, costs, sell_price, target,
+                  category_rank_percentile, gating_status) -> str:
     pct = f"{category_rank_percentile:.3%}" if category_rank_percentile is not None else "n/a"
     avg90 = f"{stage2.buybox_avg_90d_pence / 100:.2f}" if stage2.buybox_avg_90d_pence else "n/a"
-    price_source = "buybox" if stage2.buybox_price_pence else "no buybox, lowest FBA"
+    price_source = "min(buybox, 90d avg)" if stage2.buybox_price_pence else "no buybox, lowest FBA"
+    amazon_stock = (f"{stage2.amazon_instock_pct_90:.0%}" if stage2.amazon_instock_pct_90 is not None else "n/a")
 
     lines = [
         f"{asin} | {stage2.title or name or '?'}",
-        f"  category {stage2.category!r} | rank {stage2.sales_rank} (leaf pct {pct})"
+        f"  category {stage2.category!r} | rank 90d avg {stage2.sales_rank_avg90} (leaf pct {pct})"
         f" | offers {stage2.fba_offer_count} | est sales/mo {stage2.est_monthly_sales}"
-        f" | amazon_on_listing {stage2.amazon_on_listing} | gated {gated}",
+        f" | amazon_on_listing {stage2.amazon_on_listing} (in stock {amazon_stock} of 90d)"
+        f" | gating {gating_status or 'unchecked'}",
         f"  sell {sell_price / 100:.2f} ({price_source}, 90d avg {avg90})"
-        f" | fees {total_fees / 100:.2f} + storage {storage_cost / 100:.2f}"
-        f" ({est_months_to_sell:.1f}mo) + inbound {cfg.inbound_shipping_pence / 100:.2f}",
+        f" | fees {costs['total_fees_pence'] / 100:.2f} + storage {costs['storage_cost_pence'] / 100:.2f}"
+        f" ({costs['est_months_to_sell']:.1f}mo) + returns {costs['returns_allowance_pence'] / 100:.2f}"
+        f" + prep {costs['prep_cost_pence'] / 100:.2f} + inbound {costs['inbound_shipping_pence'] / 100:.2f}",
     ]
     if buy_price_pence is not None:
         if result.net_profit_pence is None:
@@ -156,6 +159,8 @@ def _format_entry(asin, stage2, name, buy_price_pence, result, cfg, total_fees,
     verdict = f"  {result.verdict.value}"
     if result.verdict_reason:
         verdict += f" -- {result.verdict_reason}"
+    if result.velocity_basis:
+        verdict += f" | velocity via {result.velocity_basis}"
     if result.flags:
         verdict += f" | flags {result.flags}"
     if buy_price_pence is None:
@@ -169,7 +174,7 @@ def run(rows: list[tuple[str, int | None, str]]) -> None:
     from app import candidate_finder, keepa_client, spapi_client
     from app.config import get_config
     from app.database import SessionLocal
-    from app.decision.engine import DecisionConfig, ScoreInput, Verdict, months_to_sell, score_deal
+    from app.decision.engine import DecisionConfig, Verdict, cost_breakdown, resolve_sell_price, score_deal
     from app.pricing.fees import SizeDims, build_fee_provider
 
     db = SessionLocal()
@@ -200,59 +205,39 @@ def run(rows: list[tuple[str, int | None, str]]) -> None:
         dims = None
         if stage2.package_weight_kg and stage2.package_longest_cm and stage2.package_dims_sum_cm:
             dims = SizeDims(stage2.package_weight_kg, stage2.package_longest_cm, stage2.package_dims_sum_cm)
-        sell_price = stage2.buybox_price_pence or stage2.lowest_fba_offer_pence or 0
+        sell_price, _ = resolve_sell_price(
+            stage2.buybox_price_pence, stage2.buybox_avg_90d_pence, stage2.lowest_fba_offer_pence)
+        sell_price = sell_price or 0
         fees = fee_provider.get_fees(
             stage2.category or "", sell_price, dims,
             stage2.fba_fulfilment_fee_pence, stage2.referral_fee_percentage, asin=asin,
         )
         oversize = fee_provider.classify_size_tier(dims) == "oversize"
+        category_rank_percentile, leaf_size = keepa_client.leaf_rank_stats(db, stage2)
 
-        category_rank_percentile = None
-        if stage2.leaf_category_id is not None and stage2.leaf_category_rank is not None:
-            category_size = keepa_client.get_category_size(db, stage2.leaf_category_id)
-            if category_size:
-                category_rank_percentile = stage2.leaf_category_rank / category_size
+        gating_status = None
+        if check_gating:
+            time.sleep(_GATING_DELAY_S)
+            gating_status = spapi_client.gating_status(spapi_client.check_gating_detail(db, asin))
 
-        # Same fee/months-to-sell model as engine.py, so the target price and
-        # the reported cost breakdown match what scoring itself charges.
-        fee_vat_mult = 1.0 if cfg.vat_registered else 1.20
-        total_fees = round((fees.referral_fee_pence + fees.fba_fulfilment_fee_pence) * fee_vat_mult)
-        est_months_to_sell = months_to_sell(
-            stage2.est_monthly_sales, stage2.fba_offer_count, category_rank_percentile, cfg)
-        storage_cost = round(fees.monthly_storage_fee_pence * est_months_to_sell)
-        target = candidate_finder.target_buy_price_pence(sell_price, total_fees, storage_cost, cfg)
-
-        result = score_deal(ScoreInput(
-            buy_price_pence=buy_price_pence if buy_price_pence is not None else max(target, 1),
-            match_confidence="high",   # the ASIN was supplied, nothing was matched
-            category=stage2.category or "",
-            fba_offer_count=stage2.fba_offer_count,
-            amazon_on_listing=stage2.amazon_on_listing,
-            fees=fees,
-            sales_rank=stage2.sales_rank,
-            est_monthly_sales=stage2.est_monthly_sales,
-            buybox_price_pence=stage2.buybox_price_pence,
-            lowest_fba_offer_pence=stage2.lowest_fba_offer_pence,
-            buybox_avg_90d_pence=stage2.buybox_avg_90d_pence,
-            rank_history_days=stage2.rank_history_days,
-            hazmat=stage2.hazmat,
-            oversize=oversize,
-            gated=None,   # reported below, never filtered on
-            category_rank_percentile=category_rank_percentile,
-            distinct_sellers_ever=stage2.distinct_sellers_ever,
-            max_new_offers_ever=stage2.max_new_offers_ever,
-        ), cfg)
+        inp = keepa_client.score_input_from_stage2(
+            stage2, buy_price_pence=buy_price_pence or 1, fees=fees, oversize=oversize,
+            category_rank_percentile=category_rank_percentile, leaf_category_size=leaf_size,
+            gating_status=gating_status,
+        )
+        # The engine's own cost model, so the target price and the reported
+        # breakdown match what scoring itself charges.
+        costs = cost_breakdown(inp, sell_price, cfg)
+        target = candidate_finder.target_buy_price_pence(sell_price, costs["non_buy_costs_pence"], cfg)
+        if buy_price_pence is None:
+            inp = replace(inp, buy_price_pence=max(target, 1))
+        result = score_deal(inp, cfg)
         if result.verdict != Verdict.REJECT:
             passes += 1
 
-        gated = None
-        if check_gating:
-            time.sleep(_GATING_DELAY_S)
-            gated = spapi_client.check_gating(db, asin)
-
         report.append(_format_entry(
-            asin, stage2, name, buy_price_pence, result, cfg, total_fees, storage_cost,
-            est_months_to_sell, sell_price, target, category_rank_percentile, gated,
+            asin, stage2, name, buy_price_pence, result, cfg, costs, sell_price, target,
+            category_rank_percentile, gating_status,
         ))
 
     body = (f"asin_check -- {len(rows)} ASIN(s) checked, {len(stage2_by_asin)} found on Keepa, "

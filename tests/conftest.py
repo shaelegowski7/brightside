@@ -68,6 +68,22 @@ def _stub_verify_token(monkeypatch):
     monkeypatch.setattr(auth, "_verify_token", lambda token: auth.AuthedUser(id="test-user-id", email=TEST_USER_EMAIL))
 
 
+@pytest.fixture(autouse=True)
+def _pin_scoring_month(monkeypatch):
+    """ScoreInput.start_month defaults to today's month, and Oct-Dec bills
+    storage at the Q4 rate -- pin a non-Q4 month so expected profits don't
+    change with the calendar. Q4 tests pass start_month explicitly."""
+    import datetime as _dt
+    from app.decision import engine
+
+    class _June(_dt.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 6, 15)
+
+    monkeypatch.setattr(engine, "date", _June)
+
+
 @pytest.fixture
 def db_session():
     session = SessionLocal()

@@ -95,8 +95,10 @@ def test_amazon_url_match_full_pass_pings_and_records(db_session, monkeypatch):
     # behaviour never yields a pure PASS.
     assert score.verdict == "PASS_WITH_FLAGS"
     assert score.flags_json == ["estimated_fees"]
-    assert score.net_profit == 599   # matches the decision-engine "clear pass" fixture exactly
-    assert score.roi == 0.599
+    # sell = min(2500, 90d avg 2400); referral 15% of 2400 = 360
+    # net = 2400 - (360+320)*1.2 - 27 - 40 - 1000 = 517
+    assert score.net_profit == 517
+    assert score.roi == 0.517
 
     ping = db_session.query(models.Ping).filter(models.Ping.asin == "B000WIDGT1").first()
     assert ping is not None
@@ -109,10 +111,9 @@ def test_amazon_url_match_full_pass_pings_and_records(db_session, monkeypatch):
 
 
 def test_gated_true_rejects_end_to_end(db_session, monkeypatch):
-    """Phase 2: when spapi_client is configured and reports gated=True, the
-    deal must REJECT via decision/engine.py's existing hard filter (`if
-    inp.gated is True: return _reject("gated", ...)`) -- proves the pipeline
-    wiring reaches all the way through, not just that a field gets set."""
+    """When SP-API reports NOT_ELIGIBLE the deal must REJECT through the
+    engine's gating rule -- proves the pipeline wiring reaches all the way
+    through, not just that a field gets set."""
     raw = RawDeal(
         source="hotukdeals", retailer="Amazon", title="Widget Deal",
         url="https://www.hotukdeals.com/deals/widget-deal-gated",
@@ -133,7 +134,8 @@ def test_gated_true_rejects_end_to_end(db_session, monkeypatch):
     })
     import app.spapi_client as spapi_client
     monkeypatch.setattr(spapi_client, "is_configured", lambda: True)
-    monkeypatch.setattr(spapi_client, "check_gating", lambda db, asin: True)
+    monkeypatch.setattr(spapi_client, "check_gating_detail",
+                        lambda db, asin: spapi_client.GatingResult(True, "NOT_ELIGIBLE", None))
 
     sent_embeds = []
     import app.discord_notifier as dn
@@ -145,9 +147,45 @@ def test_gated_true_rejects_end_to_end(db_session, monkeypatch):
     assert deal.status == "stage2_scored"   # reached scoring; the score itself is a REJECT
     score = db_session.query(models.Score).filter(models.Score.deal_id == deal.id).first()
     assert score.verdict == "REJECT"
-    assert score.verdict_reason == "gated"
+    assert score.verdict_reason == "gating_not_eligible"
     assert score.gated is True
     assert len(sent_embeds) == 0
+
+
+def test_approval_required_gating_warns_not_rejects(db_session, monkeypatch):
+    """APPROVAL_REQUIRED is paperwork (a trade invoice), not a dead SKU:
+    the deal still pings, with a warning."""
+    raw = RawDeal(
+        source="hotukdeals", retailer="Amazon", title="Widget Deal",
+        url="https://www.hotukdeals.com/deals/widget-deal-approval",
+        buy_price_pence=1000, image_url=None,
+    )
+    monkeypatch.setattr(resolver, "resolve", lambda url, key="": resolver.ResolvedDeal(
+        final_url="https://www.amazon.co.uk/dp/B000APPRV1?tag=x", html="<html></html>",
+        status_code=200, blocked=False,
+    ))
+    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean: {
+        "B000APPRV1": keepa_client.Stage1Result(
+            asin="B000APPRV1", title="Widget", category="Toys & Games",
+            sales_rank=20000, est_sell_price_pence=2400, rank_history_days=200,
+        )
+    })
+    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins: {
+        "B000APPRV1": _stage2(asin="B000APPRV1"),
+    })
+    import app.spapi_client as spapi_client
+    monkeypatch.setattr(spapi_client, "is_configured", lambda: True)
+    monkeypatch.setattr(spapi_client, "check_gating_detail",
+                        lambda db, asin: spapi_client.GatingResult(True, "APPROVAL_REQUIRED", "https://x"))
+    import app.discord_notifier as dn
+    monkeypatch.setattr(dn, "send_ping", lambda webhook_url, embed: True)
+
+    pipeline.process_deal(db_session, raw, _decision_cfg(), _fee_provider(), _APP_CFG)
+
+    deal = db_session.query(models.Deal).filter(models.Deal.url == raw.url).first()
+    score = db_session.query(models.Score).filter(models.Score.deal_id == deal.id).first()
+    assert deal.status == "pinged"
+    assert "gating_approval_required" in score.flags_json
 
 
 def test_scan_source_skips_title_validation(db_session, monkeypatch):
@@ -509,10 +547,10 @@ def test_keepa_fulfilment_fee_yields_clean_pass_not_estimated(db_session, monkey
     assert score.flags_json == []
     assert score.fees_json["fba_fulfilment_fee_pence"] == 280
     assert score.fees_json["estimated"] is False
-    # total_fees = (375+280)*1.20 = 786; storage = 27*1;
-    # net_profit = 2500 - 786 - 27 - 40 - 1000(buy_price) = 647
-    assert score.net_profit == 647
-    assert score.roi == pytest.approx(0.647)
+    # sell = min(2500, 90d avg 2400); total_fees = (360+280)*1.20 = 768; storage = 27*1;
+    # net_profit = 2400 - 768 - 27 - 40 - 1000(buy_price) = 565
+    assert score.net_profit == 565
+    assert score.roi == pytest.approx(0.565)
 
 
 def test_pokemon_center_restock_reprocesses_at_same_price(db_session, monkeypatch):

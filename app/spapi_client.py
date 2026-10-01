@@ -293,6 +293,20 @@ def check_gating_detail(db: Session, asin: str) -> GatingResult | None:
     return result
 
 
+def gating_status(result: GatingResult | None) -> str | None:
+    """"ungated" | "approval_required" | "not_eligible", or None when
+    unchecked. Only NOT_ELIGIBLE is final; any other restriction (including
+    ASIN_NOT_FOUND) is reported as approval_required so it warns rather than
+    silently rejecting."""
+    if result is None:
+        return None
+    if not result.gated:
+        return "ungated"
+    if result.reason_code and "NOT_ELIGIBLE" in result.reason_code:
+        return "not_eligible"
+    return "approval_required"
+
+
 def check_gating(db: Session, asin: str) -> bool | None:
     """Bool-only view of check_gating_detail, for callers that only filter
     on gated/not (pipeline.py's scoring path). Prefer check_gating_detail
