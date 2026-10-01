@@ -36,7 +36,7 @@ min_buybox_pence exists to stop spending tokens down there.
 """
 import re
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from sqlalchemy.orm import Session
 
@@ -72,6 +72,7 @@ class Candidate:
     # worth sourcing for FIRST, so it is carried through to the report
     # rather than silently dropped. NOT_ELIGIBLE never reaches here.
     gating: str | None = None
+    flags: list[str] = field(default_factory=list)   # the engine's warnings at the target price
 
     def months_to_clear(self, units: int) -> float | None:
         """How long an order of `units` takes to sell through, assuming the
@@ -384,7 +385,8 @@ def score_asins(
         if target <= 0:
             continue
         # Every other hard rule, at the price we'd actually pay.
-        if score_deal(replace(inp, buy_price_pence=target), cfg).verdict == Verdict.REJECT:
+        result = score_deal(replace(inp, buy_price_pence=target), cfg)
+        if result.verdict == Verdict.REJECT:
             continue
         gating_note = (gate.reason_code or "GATED") if gate is not None and gate.gated else None
 
@@ -397,6 +399,7 @@ def score_asins(
             fba_offer_count=stage2.fba_offer_count,
             est_monthly_sales=stage2.est_monthly_sales,
             gating=gating_note,
+            flags=result.flags,
         ))
     return candidates
 
