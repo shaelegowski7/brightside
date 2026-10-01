@@ -2,6 +2,13 @@
 # Secrets (DATABASE_URL, KEEPA_API_KEY, DISCORD_WEBHOOK_URL, PWA_SHARED_SECRET)
 # live in env vars, never here. See app/config.py for how this is loaded.
 
+# Master on/off switch for every scheduled job that spends Keepa tokens: the
+# hotukdeals poll, the retailer clearance crawlers and the daily candidate
+# finder. Off, the app still serves manual /scan and /crawl and posts the
+# Discord summaries. Takes effect on the next deploy.
+live_pipeline:
+  enabled: false   # turned off 2026-10-01 to free Keepa tokens for manual scans
+
 thresholds:
   min_roi: 0.30                # hard-reject below this (spec default: 30%)
   min_net_profit_pence: 300    # hard-reject below this (spec default: £3)

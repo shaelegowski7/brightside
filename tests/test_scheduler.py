@@ -140,3 +140,42 @@ def test_post_weekly_summary_tolerates_missing_thresholds_config(monkeypatch):
     scheduler.post_weekly_summary()
 
     assert build_weekly_calls == [(72, None)]
+
+
+class _RecordingScheduler:
+    def __init__(self):
+        self.job_ids = []
+        self.started = False
+
+    def add_job(self, fn, trigger, id, **kwargs):
+        self.job_ids.append(id)
+
+    def start(self):
+        self.started = True
+
+
+def _switch_cfg(enabled: bool) -> dict:
+    return {
+        "live_pipeline": {"enabled": enabled},
+        "hukd": {"poll_interval_minutes": 7},
+        "bq": {"enabled": True, "poll_interval_minutes": 180},
+        "candidate_finder": {"enabled": True, "run_interval_hours": 24},
+        "monitoring": {},
+    }
+
+
+def test_live_pipeline_off_registers_only_the_summaries(monkeypatch):
+    rec = _RecordingScheduler()
+    monkeypatch.setattr(scheduler, "scheduler", rec)
+    monkeypatch.setattr(scheduler, "get_config", lambda: _switch_cfg(False))
+    scheduler.start_scheduler()
+    assert rec.started
+    assert rec.job_ids == ["post_daily_summary", "post_weekly_summary"]
+
+
+def test_live_pipeline_on_registers_the_keepa_jobs(monkeypatch):
+    rec = _RecordingScheduler()
+    monkeypatch.setattr(scheduler, "scheduler", rec)
+    monkeypatch.setattr(scheduler, "get_config", lambda: _switch_cfg(True))
+    scheduler.start_scheduler()
+    assert {"poll_hukd_feeds", "poll_bq_clearance", "run_candidate_finder"} <= set(rec.job_ids)

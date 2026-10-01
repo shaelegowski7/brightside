@@ -238,6 +238,41 @@ def post_weekly_summary() -> None:
 
 def start_scheduler() -> None:
     app_cfg = get_config()
+    if (app_cfg.get("live_pipeline") or {}).get("enabled", True):
+        _add_pipeline_jobs(app_cfg)
+    else:
+        print("[SCHEDULER] live pipeline OFF (live_pipeline.enabled) -- no deal polls, "
+              "clearance crawls or candidate finder; manual /scan and /crawl still work")
+
+    monitoring_cfg = app_cfg.get("monitoring", {})
+    if monitoring_cfg.get("daily_summary_enabled", True):
+        scheduler.add_job(
+            post_daily_summary,
+            IntervalTrigger(hours=24),
+            id="post_daily_summary",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        print("[SCHEDULER] daily summary enabled, posting every 24h")
+
+    if monitoring_cfg.get("weekly_summary_enabled", True):
+        scheduler.add_job(
+            post_weekly_summary,
+            IntervalTrigger(hours=168),
+            id="post_weekly_summary",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        print("[SCHEDULER] weekly summary enabled, posting every 168h")
+
+    scheduler.start()
+    print("[SCHEDULER] started")
+
+
+def _add_pipeline_jobs(app_cfg: dict) -> None:
+    """Every scheduled job that spends Keepa tokens."""
     interval_minutes = app_cfg["hukd"]["poll_interval_minutes"]
     scheduler.add_job(
         poll_hukd_feeds,
@@ -277,29 +312,6 @@ def start_scheduler() -> None:
         )
         print(f"[SCHEDULER] {cfg_key} enabled, polling every {interval}m")
 
-    monitoring_cfg = app_cfg.get("monitoring", {})
-    if monitoring_cfg.get("daily_summary_enabled", True):
-        scheduler.add_job(
-            post_daily_summary,
-            IntervalTrigger(hours=24),
-            id="post_daily_summary",
-            max_instances=1,
-            coalesce=True,
-            replace_existing=True,
-        )
-        print("[SCHEDULER] daily summary enabled, posting every 24h")
-
-    if monitoring_cfg.get("weekly_summary_enabled", True):
-        scheduler.add_job(
-            post_weekly_summary,
-            IntervalTrigger(hours=168),
-            id="post_weekly_summary",
-            max_instances=1,
-            coalesce=True,
-            replace_existing=True,
-        )
-        print("[SCHEDULER] weekly summary enabled, posting every 168h")
-
     finder_cfg = app_cfg.get("candidate_finder") or {}
     if finder_cfg.get("enabled", False):
         finder_hours = finder_cfg.get("run_interval_hours", 24)
@@ -312,6 +324,4 @@ def start_scheduler() -> None:
             replace_existing=True,
         )
         print(f"[SCHEDULER] candidate finder enabled, running every {finder_hours}h")
-
-    scheduler.start()
-    print(f"[SCHEDULER] started, polling every {interval_minutes}m")
+    print(f"[SCHEDULER] live pipeline ON, hukd polling every {interval_minutes}m")
