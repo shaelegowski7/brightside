@@ -3,7 +3,7 @@ uvicorn==0.51.0
 # 2.1 makes psycopg 3 the default postgresql:// driver; we install psycopg2.
 sqlalchemy==2.0.51
 alembic==1.18.5
-psycopg2-binary==2.9.12
+psycopg2-binary==2.9.13
 python-dotenv==1.2.2
 pydantic==2.13.4
 pyyaml==6.0.3
