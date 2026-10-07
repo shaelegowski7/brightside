@@ -47,6 +47,11 @@ vat_registered: false
 # Reject anything flagged oversize tier (see fees.size_tier_thresholds_cm_kg).
 reject_oversize: true
 
+# Hazmat (dangerous goods, e.g. perfume) is sellable through FBA UK once each
+# ASIN passes Amazon's DG review, so it's a warning by default and storage is
+# costed at fees.monthly_storage_fee_pence_dg. true restores the hard reject.
+reject_hazmat: false
+
 # Category names as they appear in Keepa's categoryTree[].name. Anything not
 # listed falls back to `default_rank_threshold`. Placeholder values — tune
 # against realised sell-through once scores/outcomes data exists.
@@ -807,6 +812,15 @@ fees:
   monthly_storage_fee_pence_q4:
     standard: 54
     oversize: 95
+  # Dangerous goods, scaled the same way from Seller Central's DG table
+  # (rates effective 2026-02-01): standard £0.74 -> £1.30, oversize £0.70 ->
+  # £1.11 per cubic foot, against £0.76 and £0.55 for non-DG.
+  monthly_storage_fee_pence_dg:
+    standard: 26
+    oversize: 76
+  monthly_storage_fee_pence_dg_q4:
+    standard: 46
+    oversize: 121
   # Simplified UK FBA size-tier breakpoints (max dimension in cm, max weight
   # in kg). First tier a product fits under (in this order) wins.
   size_tier_thresholds_cm_kg:

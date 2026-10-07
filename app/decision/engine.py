@@ -51,6 +51,8 @@ class FeeInput:
     monthly_storage_fee_pence: int
     estimated: bool   # True when sourced from the config fee-table fallback (no SP-API yet)
     q4_monthly_storage_fee_pence: int | None = None   # None = same rate all year
+    dg_monthly_storage_fee_pence: int | None = None    # dangerous-goods rates; None = use the standard ones
+    dg_q4_monthly_storage_fee_pence: int | None = None
 
 
 @dataclass
@@ -131,6 +133,7 @@ class DecisionConfig:
     fba_offer_growth_warn_pct: float = 0.5
     price_downtrend_warn_pct: float = 0.10
     expiry_dated_categories: frozenset = frozenset()
+    reject_hazmat: bool = True
 
     @classmethod
     def from_app_config(cls, cfg: dict) -> "DecisionConfig":
@@ -170,6 +173,7 @@ class DecisionConfig:
             fba_offer_growth_warn_pct=warn_cfg.get("fba_offer_growth_pct", 0.5),
             price_downtrend_warn_pct=warn_cfg.get("price_downtrend_pct", 0.10),
             expiry_dated_categories=frozenset(warn_cfg.get("expiry_dated_categories") or []),
+            reject_hazmat=cfg.get("reject_hazmat", True),
         )
 
 
@@ -232,14 +236,18 @@ def months_to_sell(est_monthly_sales: float | None, fba_offer_count: int, cfg: D
     return min(max(cfg.order_units / max(our_share, 0.1), 1.0), 6.0)
 
 
-def _storage_cost(fees: FeeInput, months: float, start_month: int, cfg: DecisionConfig) -> int:
+def _storage_cost(fees: FeeInput, months: float, start_month: int, cfg: DecisionConfig,
+                  hazmat: bool = False) -> int:
     """Month by month from start_month, at the Q4 rate in cfg.q4_months; the
-    last month is pro-rated."""
+    last month is pro-rated. Dangerous goods use Amazon's DG rates."""
+    normal, q4_rate = fees.monthly_storage_fee_pence, fees.q4_monthly_storage_fee_pence
+    if hazmat and fees.dg_monthly_storage_fee_pence is not None:
+        normal, q4_rate = fees.dg_monthly_storage_fee_pence, fees.dg_q4_monthly_storage_fee_pence
     total, remaining, month = 0.0, months, start_month
     while remaining > 0:
         part = min(1.0, remaining)
-        q4 = month in cfg.q4_months and fees.q4_monthly_storage_fee_pence is not None
-        total += (fees.q4_monthly_storage_fee_pence if q4 else fees.monthly_storage_fee_pence) * part
+        q4 = month in cfg.q4_months and q4_rate is not None
+        total += (q4_rate if q4 else normal) * part
         remaining -= part
         month = month % 12 + 1
     return round(total)
@@ -255,7 +263,7 @@ def cost_breakdown(inp: ScoreInput, sell_price_pence: int, cfg: DecisionConfig) 
     total_fees = round((amazon_fees + digital_services_fee) * fee_vat_mult)
 
     est_months = months_to_sell(_effective_monthly_sales(inp, cfg), inp.fba_offer_count, cfg)
-    storage_cost = _storage_cost(inp.fees, est_months, inp.start_month, cfg)
+    storage_cost = _storage_cost(inp.fees, est_months, inp.start_month, cfg, inp.hazmat)
     returns_pct = cfg.returns_allowance_pct.get(inp.category, cfg.default_returns_allowance_pct)
     returns_allowance = round(sell_price_pence * returns_pct)
 
@@ -294,7 +302,10 @@ def score_deal(inp: ScoreInput, cfg: DecisionConfig) -> ScoreResult:
         return _reject("category_blocklisted", sell_price)
 
     # --- can't sell it at all ---
-    if inp.hazmat:
+    # Hazmat isn't unsellable: Amazon UK takes dangerous goods (perfume is a
+    # flammable liquid) into FBA once each ASIN passes its DG review. Off by
+    # config, it becomes a warning and storage is costed at the DG rates.
+    if inp.hazmat and cfg.reject_hazmat:
         return _reject("hazmat", sell_price)
     if inp.oversize and cfg.reject_oversize:
         return _reject("oversize", sell_price)
@@ -402,6 +413,8 @@ def score_deal(inp: ScoreInput, cfg: DecisionConfig) -> ScoreResult:
         flags.append("one_active_seller_90d")
     if inp.gating_status == "approval_required":
         flags.append("gating_approval_required")
+    if inp.hazmat:
+        flags.append("hazmat: dangerous goods -- needs Amazon's DG review (safety data sheet) before FBA")
 
     verdict = Verdict.PASS_WITH_FLAGS if flags else Verdict.PASS
     return ScoreResult(

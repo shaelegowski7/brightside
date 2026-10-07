@@ -410,3 +410,19 @@ def test_min_sell_price_floor_defaults_to_off():
     """Configs built without the floor behave exactly as they did before it
     existed, so nothing that predates this change silently changes verdict."""
     assert default_config().min_sell_price_pence == 0
+
+
+def test_hazmat_warns_instead_of_rejecting_when_switched_off():
+    r = score_deal(_healthy(hazmat=True), _full_cfg(reject_hazmat=False))
+    assert r.verdict == Verdict.PASS_WITH_FLAGS
+    assert any(f.startswith("hazmat") for f in r.flags)
+
+
+def test_hazmat_storage_uses_dangerous_goods_rates():
+    fees = FeeInput(referral_fee_pence=375, fba_fulfilment_fee_pence=230, monthly_storage_fee_pence=27,
+                    estimated=False, q4_monthly_storage_fee_pence=54,
+                    dg_monthly_storage_fee_pence=26, dg_q4_monthly_storage_fee_pence=46)
+    slow = dict(est_monthly_sales=50, fba_offer_count=1, fees=fees, start_month=11)   # 2 months, both Q4
+    cfg = _full_cfg(reject_hazmat=False)
+    assert score_deal(_healthy(**slow), cfg).fees_breakdown["storage_cost_pence"] == 108
+    assert score_deal(_healthy(hazmat=True, **slow), cfg).fees_breakdown["storage_cost_pence"] == 92
