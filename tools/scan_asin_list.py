@@ -53,8 +53,6 @@ batch, so an interrupted run costs seconds rather than hours of paid lookups.
 import os
 import re
 import sys
-import time
-from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -63,7 +61,6 @@ _ASIN_RE = re.compile(r"^B[0-9A-Z]{9}$")
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _OUT_PATH = _REPO_ROOT / "asin_check_candidates.txt"
 _CHUNK = 100
-_GATING_DELAY_S = 0.3
 
 
 def _use_local_db() -> None:
@@ -171,11 +168,12 @@ def _format_entry(asin, stage2, name, buy_price_pence, result, cfg, costs, sell_
 
 
 def run(rows: list[tuple[str, int | None, str]]) -> None:
-    from app import candidate_finder, keepa_client, spapi_client
+    from app import keepa_client, spapi_client
+    from app.assessment import assess
     from app.config import get_config
     from app.database import SessionLocal
-    from app.decision.engine import DecisionConfig, Verdict, cost_breakdown, resolve_sell_price, score_deal
-    from app.pricing.fees import SizeDims, build_fee_provider
+    from app.decision.engine import DecisionConfig, Verdict
+    from app.pricing.fees import build_fee_provider
 
     db = SessionLocal()
     app_cfg = get_config()
@@ -202,42 +200,13 @@ def run(rows: list[tuple[str, int | None, str]]) -> None:
             report.append(f"{asin} | {name or '?'}\n  NOT FOUND on Keepa\n")
             continue
 
-        dims = None
-        if stage2.package_weight_kg and stage2.package_longest_cm and stage2.package_dims_sum_cm:
-            dims = SizeDims(stage2.package_weight_kg, stage2.package_longest_cm, stage2.package_dims_sum_cm)
-        sell_price, _ = resolve_sell_price(
-            stage2.buybox_price_pence, stage2.buybox_avg_90d_pence, stage2.lowest_fba_offer_pence)
-        sell_price = sell_price or 0
-        fees = fee_provider.get_fees(
-            stage2.category or "", sell_price, dims,
-            stage2.fba_fulfilment_fee_pence, stage2.referral_fee_percentage, asin=asin,
-        )
-        oversize = fee_provider.classify_size_tier(dims) == "oversize"
-        category_rank_percentile, leaf_size = keepa_client.leaf_rank_stats(db, stage2)
-
-        gating_status = None
-        if check_gating:
-            time.sleep(_GATING_DELAY_S)
-            gating_status = spapi_client.gating_status(spapi_client.check_gating_detail(db, asin))
-
-        inp = keepa_client.score_input_from_stage2(
-            stage2, buy_price_pence=buy_price_pence or 1, fees=fees, oversize=oversize,
-            category_rank_percentile=category_rank_percentile, leaf_category_size=leaf_size,
-            gating_status=gating_status,
-        )
-        # The engine's own cost model, so the target price and the reported
-        # breakdown match what scoring itself charges.
-        costs = cost_breakdown(inp, sell_price, cfg)
-        target = candidate_finder.target_buy_price_pence(sell_price, costs["non_buy_costs_pence"], cfg)
-        if buy_price_pence is None:
-            inp = replace(inp, buy_price_pence=max(target, 1))
-        result = score_deal(inp, cfg)
-        if result.verdict != Verdict.REJECT:
+        a = assess(db, stage2, cfg, fee_provider, buy_price_pence, check_gating)
+        if a.result.verdict != Verdict.REJECT:
             passes += 1
 
         report.append(_format_entry(
-            asin, stage2, name, buy_price_pence, result, cfg, costs, sell_price, target,
-            category_rank_percentile, gating_status,
+            asin, stage2, name, buy_price_pence, a.result, cfg, a.costs, a.sell_price_pence,
+            a.target_buy_price_pence, a.category_rank_percentile, a.gating_status,
         ))
 
     body = (f"asin_check -- {len(rows)} ASIN(s) checked, {len(stage2_by_asin)} found on Keepa, "

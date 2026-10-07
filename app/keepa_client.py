@@ -100,6 +100,7 @@ _DAY_MINUTES = 24 * 60
 
 _client: "keepa.Keepa | None" = None
 _seller_name_cache: dict[str, tuple[str, ...]] = {}
+_seller_country_cache: dict[str, str | None] = {}
 
 # keepa's own default is 10s, which a batched stage2_full sits right on top
 # of: a 50-ASIN offers=20 query measured ~10s against the live API
@@ -249,7 +250,7 @@ def _sellers_active_since(product: dict, since: int) -> int | None:
     return len(ids) if ids else None
 
 
-def _main_seller_id(product: dict) -> str | None:
+def main_seller_id(product: dict) -> str | None:
     """Current buy-box holder, else the most recent one on record."""
     current = (product.get("stats") or {}).get("buyBoxSellerId")
     if isinstance(current, str) and current and not current.startswith("-"):
@@ -290,6 +291,8 @@ def _lookup_seller_names(db: Session, client, seller_ids: set[str]) -> None:
     for sid in missing:
         info = sellers.get(sid) or {}
         _seller_name_cache[sid] = tuple(n for n in (info.get("sellerName"), info.get("businessName")) if n)
+        address = info.get("address") or []
+        _seller_country_cache[sid] = address[-1] if address else None   # ISO code, last line (GB, CN, HK...)
 
 
 def _referral_fee_percentage(product: dict) -> float | None:
@@ -505,8 +508,9 @@ def stage1_screen_passes(result: Stage1Result, buy_price_pence: int, cfg: Decisi
     return True, None
 
 
-def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
-    """Only call for stage-1 survivors. Batch up to 100 per call."""
+def fetch_full(db: Session, asins: list[str]) -> list[dict]:
+    """Raw stage-2 Keepa products (offers=20, 90-day stats), with the main
+    buy-box sellers' names cached for parse_stage2. Batch up to 100 per call."""
     client = _get_client()
     tokens_before = client.tokens_left
     products = _query_with_retry(
@@ -519,85 +523,89 @@ def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
         wait=True,
     )
     _log_tokens(db, "stage2_full", len(asins), tokens_before, client.tokens_left)
-    _lookup_seller_names(db, client, {s for s in map(_main_seller_id, products) if s})
+    _lookup_seller_names(db, client, {s for s in map(main_seller_id, products) if s})
+    return products
 
+
+def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
+    """Only call for stage-1 survivors. Batch up to 100 per call."""
     now = _keepa_now()
-    results: dict[str, Stage2Result] = {}
-    for product in products:
-        asin = product.get("asin")
-        if not asin:
-            continue
-        stats = product.get("stats") or {}
-        current = stats.get("current")
-        avg90 = stats.get("avg90")
-        csv = product.get("csv") or []
+    return {p["asin"]: parse_stage2(p, now) for p in fetch_full(db, asins) if p.get("asin")}
 
-        buybox_price = stats.get("buyBoxPrice")
-        if buybox_price is not None and buybox_price < 0:   # -2 = no buy box
-            buybox_price = None
 
-        fba_offer_count = _csv_value(current, _IDX_COUNT_NEW_FBA)
-        lowest_fba = _csv_value(current, _IDX_NEW_FBA)
-        sales_rank = _csv_value(current, _IDX_SALES_RANK)
-        buybox_avg_90d = _csv_value(avg90, _IDX_BUY_BOX_SHIPPING)
+def parse_stage2(product: dict, now: int | None = None) -> Stage2Result:
+    now = now if now is not None else _keepa_now()
+    asin = product["asin"]
+    stats = product.get("stats") or {}
+    current = stats.get("current")
+    avg90 = stats.get("avg90")
+    csv = product.get("csv") or []
 
-        # Badge only -- see the velocity gate in decision/engine.py for why
-        # salesRankDrops30 is no longer used as a fallback. Kept on
-        # variation children too: it's per child, not the parent's total
-        # (checked live 2026-10-01: in all 13 families with 2+ badged
-        # siblings the figures differed, e.g. Laura Geller shades 50-600).
-        parent_asin = product.get("parentAsin")
-        monthly_sold = product.get("monthlySold")
-        est_monthly_sales = float(monthly_sold) if monthly_sold else None
-        est_monthly_sales_source = "keepa_confirmed" if monthly_sold else None
+    buybox_price = stats.get("buyBoxPrice")
+    if buybox_price is not None and buybox_price < 0:   # -2 = no buy box
+        buybox_price = None
 
-        weight_g = product.get("packageWeight")
-        dims_mm = [d for d in (product.get(k) for k in ("packageHeight", "packageLength", "packageWidth")) if d]
-        leaf_cat_id, leaf_rank = _leaf_category(product)
-        distinct_sellers_ever, max_new_offers_ever = _seller_history(product)
+    fba_offer_count = _csv_value(current, _IDX_COUNT_NEW_FBA)
+    lowest_fba = _csv_value(current, _IDX_NEW_FBA)
+    sales_rank = _csv_value(current, _IDX_SALES_RANK)
+    buybox_avg_90d = _csv_value(avg90, _IDX_BUY_BOX_SHIPPING)
 
-        since_90d = now - 90 * _DAY_MINUTES
-        leaf_history = (product.get("salesRanks") or {}).get(str(leaf_cat_id)) if leaf_cat_id else None
-        leaf_rank_avg90 = _time_weighted_avg(leaf_history, since_90d, now) if leaf_history else None
-        sales_rank_avg90 = _csv_value(avg90, _IDX_SALES_RANK)
-        buybox_avg_30d = _csv_value(stats.get("avg30"), _IDX_BUY_BOX_SHIPPING)
-        fba_history = csv[_IDX_COUNT_NEW_FBA] if len(csv) > _IDX_COUNT_NEW_FBA and csv[_IDX_COUNT_NEW_FBA] else []
-        main_seller = _main_seller_id(product)
+    # Badge only -- see the velocity gate in decision/engine.py for why
+    # salesRankDrops30 is no longer used as a fallback. Kept on
+    # variation children too: it's per child, not the parent's total
+    # (checked live 2026-10-01: in all 13 families with 2+ badged
+    # siblings the figures differed, e.g. Laura Geller shades 50-600).
+    parent_asin = product.get("parentAsin")
+    monthly_sold = product.get("monthlySold")
+    est_monthly_sales = float(monthly_sold) if monthly_sold else None
+    est_monthly_sales_source = "keepa_confirmed" if monthly_sold else None
 
-        results[asin] = Stage2Result(
-            asin=asin,
-            title=product.get("title"),
-            category=_category_name(product),
-            sales_rank=int(sales_rank) if sales_rank is not None else None,
-            buybox_price_pence=int(buybox_price) if buybox_price is not None else None,
-            amazon_on_listing=_amazon_has_new_offer(product),
-            fba_offer_count=int(fba_offer_count) if fba_offer_count is not None else 0,
-            lowest_fba_offer_pence=int(lowest_fba) if lowest_fba is not None else None,
-            est_monthly_sales=est_monthly_sales,
-            est_monthly_sales_source=est_monthly_sales_source,
-            buybox_avg_90d_pence=int(buybox_avg_90d) if buybox_avg_90d is not None else None,
-            rank_history_days=_rank_history_days(product),
-            hazmat=bool(product.get("hazardousMaterials")),
-            package_weight_kg=(weight_g / 1000) if weight_g else None,
-            package_longest_cm=(max(dims_mm) / 10) if dims_mm else None,
-            package_dims_sum_cm=(sum(dims_mm) / 10) if dims_mm else None,
-            fba_fulfilment_fee_pence=_fba_fulfilment_fee_pence(product),
-            referral_fee_percentage=_referral_fee_percentage(product),
-            leaf_category_id=leaf_cat_id,
-            leaf_category_rank=leaf_rank,
-            distinct_sellers_ever=distinct_sellers_ever,
-            max_new_offers_ever=max_new_offers_ever,
-            sales_rank_avg90=int(sales_rank_avg90) if sales_rank_avg90 is not None else None,
-            leaf_rank_avg90=round(leaf_rank_avg90) if leaf_rank_avg90 is not None else None,
-            buybox_avg_30d_pence=int(buybox_avg_30d) if buybox_avg_30d is not None else None,
-            amazon_instock_pct_90=_amazon_instock_pct_90(stats),
-            fba_offer_count_30d_ago=_value_at(fba_history, now - 30 * _DAY_MINUTES) if fba_history else None,
-            sellers_active_90d=_sellers_active_since(product, since_90d),
-            brand_matches_main_seller=_brand_matches_seller(
-                product.get("brand"), _seller_name_cache.get(main_seller, ())) if main_seller else None,
-            is_variation=bool(parent_asin),
-        )
-    return results
+    weight_g = product.get("packageWeight")
+    dims_mm = [d for d in (product.get(k) for k in ("packageHeight", "packageLength", "packageWidth")) if d]
+    leaf_cat_id, leaf_rank = _leaf_category(product)
+    distinct_sellers_ever, max_new_offers_ever = _seller_history(product)
+
+    since_90d = now - 90 * _DAY_MINUTES
+    leaf_history = (product.get("salesRanks") or {}).get(str(leaf_cat_id)) if leaf_cat_id else None
+    leaf_rank_avg90 = _time_weighted_avg(leaf_history, since_90d, now) if leaf_history else None
+    sales_rank_avg90 = _csv_value(avg90, _IDX_SALES_RANK)
+    buybox_avg_30d = _csv_value(stats.get("avg30"), _IDX_BUY_BOX_SHIPPING)
+    fba_history = csv[_IDX_COUNT_NEW_FBA] if len(csv) > _IDX_COUNT_NEW_FBA and csv[_IDX_COUNT_NEW_FBA] else []
+    main_seller = main_seller_id(product)
+
+    return Stage2Result(
+        asin=asin,
+        title=product.get("title"),
+        category=_category_name(product),
+        sales_rank=int(sales_rank) if sales_rank is not None else None,
+        buybox_price_pence=int(buybox_price) if buybox_price is not None else None,
+        amazon_on_listing=_amazon_has_new_offer(product),
+        fba_offer_count=int(fba_offer_count) if fba_offer_count is not None else 0,
+        lowest_fba_offer_pence=int(lowest_fba) if lowest_fba is not None else None,
+        est_monthly_sales=est_monthly_sales,
+        est_monthly_sales_source=est_monthly_sales_source,
+        buybox_avg_90d_pence=int(buybox_avg_90d) if buybox_avg_90d is not None else None,
+        rank_history_days=_rank_history_days(product),
+        hazmat=bool(product.get("hazardousMaterials")),
+        package_weight_kg=(weight_g / 1000) if weight_g else None,
+        package_longest_cm=(max(dims_mm) / 10) if dims_mm else None,
+        package_dims_sum_cm=(sum(dims_mm) / 10) if dims_mm else None,
+        fba_fulfilment_fee_pence=_fba_fulfilment_fee_pence(product),
+        referral_fee_percentage=_referral_fee_percentage(product),
+        leaf_category_id=leaf_cat_id,
+        leaf_category_rank=leaf_rank,
+        distinct_sellers_ever=distinct_sellers_ever,
+        max_new_offers_ever=max_new_offers_ever,
+        sales_rank_avg90=int(sales_rank_avg90) if sales_rank_avg90 is not None else None,
+        leaf_rank_avg90=round(leaf_rank_avg90) if leaf_rank_avg90 is not None else None,
+        buybox_avg_30d_pence=int(buybox_avg_30d) if buybox_avg_30d is not None else None,
+        amazon_instock_pct_90=_amazon_instock_pct_90(stats),
+        fba_offer_count_30d_ago=_value_at(fba_history, now - 30 * _DAY_MINUTES) if fba_history else None,
+        sellers_active_90d=_sellers_active_since(product, since_90d),
+        brand_matches_main_seller=_brand_matches_seller(
+            product.get("brand"), _seller_name_cache.get(main_seller, ())) if main_seller else None,
+        is_variation=bool(parent_asin),
+    )
 
 
 def leaf_rank_stats(db: Session, stage2: Stage2Result) -> tuple[float | None, int | None]:
