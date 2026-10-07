@@ -31,3 +31,21 @@ def fetch(url: str, api_key: str, ultra_premium: bool = False) -> tuple[int, str
         print(f"[SCRAPERAPI] {url}: request failed: {e}")
         return None
     return resp.status_code, resp.text
+
+
+def google_search(query: str, api_key: str) -> list[dict]:
+    """google.co.uk organic results as dicts with title/snippet/displayed_link.
+    `link` is a Google redirect, so the real site is in displayed_link
+    ("https://peelaway.co.uk › where-to-buy"; checked live 2026-10-01).
+    [] on any failure, so a lookup degrades to its offline evidence."""
+    try:
+        resp = requests.get(
+            "https://api.scraperapi.com/structured/google/search",
+            params={"api_key": api_key, "query": query, "country_code": "uk", "tld": "co.uk"},
+            timeout=_TIMEOUT_SECONDS,
+        )
+        resp.raise_for_status()
+        return resp.json().get("organic_results") or []
+    except (requests.RequestException, ValueError) as e:
+        print(f"[SCRAPERAPI] search {query!r} failed: {e}")
+        return []
