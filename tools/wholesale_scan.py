@@ -249,7 +249,7 @@ def _load_checkpoint(path: Path, key: str) -> dict[str, dict]:
     return checkpoint
 
 
-def run_scan(source_name: str, rows: list[FeedRow]) -> None:
+def run_scan(source_name: str, rows: list[FeedRow], out_dir: Path | None = None, persist: bool = True) -> None:
     """source_name becomes the prefix for every output/checkpoint file
     (<source_name>_candidates.txt, <source_name>_stage{1,2}_checkpoint.jsonl)
     and the Keepa token-log stage label -- keep it short and stable across
@@ -260,9 +260,13 @@ def run_scan(source_name: str, rows: list[FeedRow]) -> None:
     captures, so an unhandled exception showed up only as "scan died
     (exit 1)" with no way to tell what broke (novanex, 2026-09-06, twice).
     Printing to stdout puts it in the same log as the progress lines.
+
+    out_dir defaults to the repo root. persist=False keeps the results out of
+    supplier_scan_results, for suppliers you'd never buy from (the sourcing
+    lookup treats anything there as a real source).
     """
     try:
-        _run_scan(source_name, rows)
+        _run_scan(source_name, rows, out_dir or _REPO_ROOT, persist)
     except BaseException as e:   # noqa: BLE001 -- re-raised immediately
         print(f"[SCAN:{source_name}] DIED: {type(e).__name__}: {e}")
         traceback.print_exc(file=sys.stdout)
@@ -270,10 +274,11 @@ def run_scan(source_name: str, rows: list[FeedRow]) -> None:
         raise
 
 
-def _run_scan(source_name: str, rows: list[FeedRow]) -> None:
-    out_path = _REPO_ROOT / f"{source_name}_candidates.txt"
-    stage1_checkpoint_path = _REPO_ROOT / f"{source_name}_stage1_checkpoint.jsonl"
-    stage2_checkpoint_path = _REPO_ROOT / f"{source_name}_stage2_checkpoint.jsonl"
+def _run_scan(source_name: str, rows: list[FeedRow], out_dir: Path, persist: bool) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{source_name}_candidates.txt"
+    stage1_checkpoint_path = out_dir / f"{source_name}_stage1_checkpoint.jsonl"
+    stage2_checkpoint_path = out_dir / f"{source_name}_stage2_checkpoint.jsonl"
 
     by_ean = {r.ean: r for r in rows}
     print(f"[SCAN:{source_name}] {len(rows)} usable rows")
@@ -494,6 +499,9 @@ def _run_scan(source_name: str, rows: list[FeedRow]) -> None:
     # Best-effort on purpose: a scan that found deals must not report failure
     # because the database was unreachable. The .jsonl files still hold
     # everything and tools/backfill_scan_results.py can replay them.
+    if not persist:
+        print(f"[SCAN:{source_name}] not persisted to supplier_scan_results (persist=False)")
+        return
     try:
         stage1_records = list(_load_checkpoint(stage1_checkpoint_path, "ean").values())
         written, _ = scan_store.persist_scan(db, source_name, stage1_records, results)
