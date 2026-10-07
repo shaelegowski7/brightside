@@ -11,7 +11,7 @@ live_pipeline:
 
 thresholds:
   min_roi: 0.30                # hard-reject below this (spec default: 30%)
-  min_net_profit_pence: 300    # hard-reject below this (spec default: £3)
+  min_net_profit_pence: 80     # hard-reject below this (spec default: £3; £1 on 2026-10-06, 80p on 2026-10-07 on industry advice)
   # Optional coarse floor on the Amazon sell price for the catalogue-first
   # path. LEAVE AT 0 unless you specifically want to skip a whole list.
   #
