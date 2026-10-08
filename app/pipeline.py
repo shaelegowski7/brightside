@@ -24,6 +24,10 @@ from .matching import amazon_url, cache, jsonld, model_number, title_search_cach
 from .pricing.fees import FeeProvider, SizeDims
 from .sources.base import RawDeal
 
+# Live deals become Discord buy prompts, so they always read Keepa fresh;
+# the reads still fill the cache for later rescans.
+_LIVE = 0
+
 # Statuses safe to re-run the pipeline on if the deal resurfaces at the same
 # price. Everything else (matched a category-reject, already pinged, already
 # suppressed by cooldown, etc.) is a stable outcome at that price — retrying
@@ -178,7 +182,7 @@ def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_pr
     db.commit()
 
     if stage1 is None:
-        stage1 = keepa_client.stage1_screen(db, [product.asin], is_ean=False).get(product.asin)
+        stage1 = keepa_client.stage1_screen(db, [product.asin], is_ean=False, max_age_days=_LIVE).get(product.asin)
     if stage1 is None:
         deal.status = "stage1_rejected"
         db.commit()
@@ -192,7 +196,7 @@ def process_deal(db: Session, raw: RawDeal, decision_cfg: DecisionConfig, fee_pr
         print(f"[PIPELINE] {product.asin}: stage1 screen rejected ({reason})")
         return
 
-    stage2 = keepa_client.stage2_full(db, [product.asin]).get(product.asin)
+    stage2 = keepa_client.stage2_full(db, [product.asin], max_age_days=_LIVE).get(product.asin)
     if stage2 is None:
         deal.status = "stage1_rejected"
         db.commit()
@@ -341,7 +345,7 @@ def _resolve_product(
     # Cheap Keepa product-by-code lookup (~1-2 tokens, same price as stage 1)
     # resolves EAN -> ASIN and doubles as this product's stage-1 data, so the
     # caller skips a redundant second stage-1 call for it.
-    lookup = keepa_client.stage1_screen(db, [ean], is_ean=True)
+    lookup = keepa_client.stage1_screen(db, [ean], is_ean=True, max_age_days=_LIVE)
     result = next(iter(lookup.values()), None)
     if result is None:
         product = cache.cache_product(db, ean=ean, asin=None, title=title, matched_via="jsonld_no_match", confidence="none")

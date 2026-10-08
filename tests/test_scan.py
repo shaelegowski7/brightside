@@ -54,13 +54,13 @@ def _stage2(**overrides) -> "keepa_client.Stage2Result":
 
 
 def _mock_pass(monkeypatch, asin="B000SCAN"):
-    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean: {
+    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean, **_: {
         codes[0]: keepa_client.Stage1Result(
             asin=asin, title="Widget", category="Toys & Games",
             sales_rank=20000, est_sell_price_pence=2400, rank_history_days=200,
         )
     })
-    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins: {asin: _stage2(asin=asin)})
+    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins, **_: {asin: _stage2(asin=asin)})
     import app.discord_notifier as dn
     sent = []
     monkeypatch.setattr(dn, "send_ping", lambda webhook_url, embed: sent.append(embed) or True)
@@ -82,7 +82,7 @@ def test_run_scan_pass_returns_full_verdict(db_session, monkeypatch):
 
 
 def test_run_scan_no_ean_match_rejects_before_scoring(db_session, monkeypatch):
-    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean: {})   # Keepa has no match for this EAN
+    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean, **_: {})   # Keepa has no match for this EAN
 
     result = scan.run_scan(db_session, "0000000000000", 1000, _decision_cfg(), _fee_provider(), _APP_CFG)
 

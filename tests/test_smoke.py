@@ -197,13 +197,13 @@ def test_scan_requires_auth():
 def test_scan_succeeds_with_auth(monkeypatch):
     from app import keepa_client
 
-    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean: {
+    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean, **_: {
         codes[0]: keepa_client.Stage1Result(
             asin="B000SCANSMOKE", title="Widget", category="Toys & Games",
             sales_rank=20000, est_sell_price_pence=2400, rank_history_days=200,
         )
     })
-    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins: {
+    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins, **_: {
         "B000SCANSMOKE": keepa_client.Stage2Result(
             asin="B000SCANSMOKE", title="Widget", category="Toys & Games",
             sales_rank=20000, buybox_price_pence=2500, amazon_on_listing=False,

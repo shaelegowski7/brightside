@@ -38,6 +38,7 @@ Usage:
     python tools/scan_asin_list.py B0CSZ82WLH B00HER8E5A
     python tools/scan_asin_list.py asins.txt
     python tools/scan_asin_list.py asins.txt --price 4.99   # applies to rows with no price of their own
+    python tools/scan_asin_list.py asins.txt --fresh        # ignore the Keepa cache, fetch everything now
 
 Input file: one ASIN per line, `#` comments and blank lines ignored, with an
 optional buy price (GBP, the real inc-VAT cash cost per unit) and optional
@@ -167,7 +168,7 @@ def _format_entry(asin, stage2, name, buy_price_pence, result, cfg, costs, sell_
     return "\n".join(lines) + "\n"
 
 
-def run(rows: list[tuple[str, int | None, str]]) -> None:
+def run(rows: list[tuple[str, int | None, str]], max_age_days: float | None = None) -> None:
     from app import keepa_client, spapi_client
     from app.assessment import assess
     from app.config import get_config
@@ -188,7 +189,7 @@ def run(rows: list[tuple[str, int | None, str]]) -> None:
     stage2_by_asin: dict = {}
     for i in range(0, len(asins), _CHUNK):
         batch = asins[i:i + _CHUNK]
-        stage2_by_asin.update(keepa_client.stage2_full(db, batch))
+        stage2_by_asin.update(keepa_client.stage2_full(db, batch, max_age_days))
         print(f"[ASIN-CHECK] stage2 {min(i + _CHUNK, len(asins))}/{len(asins)}")
 
     report: list[str] = []
@@ -218,6 +219,8 @@ def run(rows: list[tuple[str, int | None, str]]) -> None:
 
 if __name__ == "__main__":
     argv = sys.argv[1:]
+    fresh = "--fresh" in argv
+    argv = [a for a in argv if a != "--fresh"]
     default_price_pence = None
     if "--price" in argv:
         idx = argv.index("--price")
@@ -231,4 +234,4 @@ if __name__ == "__main__":
     if not rows:
         print("[ASIN-CHECK] no usable ASINs in input")
         sys.exit(1)
-    run(rows)
+    run(rows, max_age_days=0 if fresh else None)

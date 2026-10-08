@@ -170,6 +170,32 @@ class CategorySize(Base):
     fetched_at = Column(DateTime(timezone=True), default=utcnow)
 
 
+class KeepaCache(Base):
+    """Parsed Keepa lookups (keepa_client.Stage1Result / Stage2Result as
+    JSON), so a rule change re-scores from stored data instead of paying
+    Keepa again. Read-through with a max age -- see app/keepa_cache.py."""
+
+    __tablename__ = "keepa_cache"
+
+    asin = Column(String, primary_key=True)
+    stage1 = Column(JSON, nullable=True)
+    stage1_fetched_at = Column(DateTime(timezone=True), nullable=True)
+    stage2 = Column(JSON, nullable=True)
+    stage2_fetched_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class KeepaCodeMap(Base):
+    """Barcode -> ASIN as Keepa resolved it. asin NULL records "Keepa has no
+    product for this code", which is most of an overseas catalogue (70% of
+    Amaze's 8,944 barcodes) and the bulk of a rescan's wasted tokens."""
+
+    __tablename__ = "keepa_code_map"
+
+    code = Column(String, primary_key=True)
+    asin = Column(String, nullable=True)
+    fetched_at = Column(DateTime(timezone=True), default=utcnow)
+
+
 class Purchase(Base):
     """Manual purchase log (spec phase 3) -- feeds the review workflow.
     score_id ties a purchase to the exact decision-engine snapshot it was

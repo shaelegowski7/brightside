@@ -69,6 +69,15 @@ def _stub_verify_token(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_keepa_cache_reads(monkeypatch):
+    """Tests feed fake Keepa payloads and some query the same ASIN twice;
+    reading the cache would answer the second from the first. Cache tests
+    switch reads back on."""
+    from app import keepa_cache
+    monkeypatch.setattr(keepa_cache, "READS_ENABLED", False)
+
+
+@pytest.fixture(autouse=True)
 def _pin_scoring_month(monkeypatch):
     """ScoreInput.start_month defaults to today's month, and Oct-Dec bills
     storage at the Q4 rate -- pin a non-Q4 month so expected profits don't

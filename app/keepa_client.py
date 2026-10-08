@@ -42,7 +42,7 @@ import requests
 from sqlalchemy.orm import Session
 from urllib3.exceptions import ProtocolError
 
-from . import models
+from . import keepa_cache, models
 from .config import get_config, get_settings
 from .decision.engine import DecisionConfig, FeeInput, ScoreInput
 from .pricing.fees import FeeProvider
@@ -390,39 +390,79 @@ class Stage2Result:
     is_variation: bool = False
 
 
-def stage1_screen(db: Session, codes: list[str], is_ean: bool) -> dict[str, Stage1Result]:
-    """`codes` are EANs when is_ean else ASINs. Batch up to 100 per call."""
+def _stage1_from_product(product: dict) -> Stage1Result:
+    stats = product.get("stats") or {}
+    avg90 = stats.get("avg90")
+    current = stats.get("current")
+    est_sell = _csv_value(avg90, _IDX_BUY_BOX_SHIPPING) or _csv_value(avg90, _IDX_NEW)
+    return Stage1Result(
+        asin=product["asin"],
+        title=product.get("title"),
+        category=_category_name(product),
+        sales_rank=_csv_value(current, _IDX_SALES_RANK),
+        est_sell_price_pence=int(est_sell) if est_sell is not None else None,
+        rank_history_days=_rank_history_days(product),
+    )
+
+
+def _query_stage1(db: Session, codes: list[str], is_asin: bool, label: str) -> list[dict]:
     client = _get_client()
     tokens_before = client.tokens_left
     products = _query_with_retry(
-        client,
-        codes,
-        domain=KEEPA_DOMAIN,
-        stats=90,
-        offers=None,
-        product_code_is_asin=not is_ean,
-        wait=True,
+        client, codes, domain=KEEPA_DOMAIN, stats=90, offers=None,
+        product_code_is_asin=is_asin, wait=True,
     )
-    _log_tokens(db, "stage1_screen", len(codes), tokens_before, client.tokens_left)
+    _log_tokens(db, label, len(codes), tokens_before, client.tokens_left)
+    return products
 
-    results: dict[str, Stage1Result] = {}
-    for product in products:
-        asin = product.get("asin")
-        if not asin:
+
+def stage1_by_code(db: Session, codes: list[str], label: str = "stage1_screen",
+                   max_age_days: float | None = None) -> dict[str, tuple[str, Stage1Result]]:
+    """Barcode -> (ASIN, stage-1 result), read through the Keepa cache.
+    Codes Keepa has no product for are remembered too, so a rescan of the
+    same catalogue doesn't pay to learn that again. Batch up to 100."""
+    age = keepa_cache.max_age("market", max_age_days)
+    code_age = keepa_cache.max_age("code_map", max_age_days)
+    known = keepa_cache.get_codes(db, codes, code_age)
+    cached = keepa_cache.get(db, 1, [a for a in known.values() if a], age, Stage1Result)
+    out = {c: (a, cached[a]) for c, a in known.items() if a and a in cached}
+    to_query = [c for c in codes if c not in known or (known[c] and known[c] not in cached)]
+    if not to_query:
+        return out
+
+    wanted = set(to_query)
+    found: dict[str, tuple[str, Stage1Result]] = {}
+    fresh: dict[str, Stage1Result] = {}
+    for product in _query_stage1(db, to_query, is_asin=False, label=label):
+        if not product.get("asin"):
             continue
-        stats = product.get("stats") or {}
-        avg90 = stats.get("avg90")
-        current = stats.get("current")
-        est_sell = _csv_value(avg90, _IDX_BUY_BOX_SHIPPING) or _csv_value(avg90, _IDX_NEW)
-        results[asin] = Stage1Result(
-            asin=asin,
-            title=product.get("title"),
-            category=_category_name(product),
-            sales_rank=_csv_value(current, _IDX_SALES_RANK),
-            est_sell_price_pence=int(est_sell) if est_sell is not None else None,
-            rank_history_days=_rank_history_days(product),
-        )
-    return results
+        hits = [c for c in (product.get("eanList") or []) + (product.get("upcList") or []) if c in wanted]
+        if not hits:
+            continue
+        s1 = _stage1_from_product(product)
+        fresh[s1.asin] = s1
+        for c in hits:
+            found[c] = (s1.asin, s1)
+    keepa_cache.put(db, 1, fresh)
+    keepa_cache.put_codes(db, {c: found[c][0] if c in found else None for c in to_query})
+    out.update(found)
+    return out
+
+
+def stage1_screen(db: Session, codes: list[str], is_ean: bool,
+                  max_age_days: float | None = None) -> dict[str, Stage1Result]:
+    """`codes` are EANs when is_ean else ASINs; results keyed by ASIN. Read
+    through the Keepa cache. Batch up to 100 per call."""
+    if is_ean:
+        return {asin: s1 for asin, s1 in stage1_by_code(db, codes, max_age_days=max_age_days).values()}
+    cached = keepa_cache.get(db, 1, codes, keepa_cache.max_age("market", max_age_days), Stage1Result)
+    missing = [c for c in codes if c not in cached]
+    if missing:
+        fresh = {p["asin"]: _stage1_from_product(p)
+                 for p in _query_stage1(db, missing, is_asin=True, label="stage1_screen") if p.get("asin")}
+        keepa_cache.put(db, 1, fresh)
+        cached.update(fresh)
+    return cached
 
 
 def search_by_term(db: Session, term: str) -> Stage1Result | None:
@@ -527,10 +567,17 @@ def fetch_full(db: Session, asins: list[str]) -> list[dict]:
     return products
 
 
-def stage2_full(db: Session, asins: list[str]) -> dict[str, Stage2Result]:
-    """Only call for stage-1 survivors. Batch up to 100 per call."""
-    now = _keepa_now()
-    return {p["asin"]: parse_stage2(p, now) for p in fetch_full(db, asins) if p.get("asin")}
+def stage2_full(db: Session, asins: list[str], max_age_days: float | None = None) -> dict[str, Stage2Result]:
+    """Only call for stage-1 survivors. Read through the Keepa cache; pass
+    max_age_days=0 for a guaranteed-current read. Batch up to 100 per call."""
+    cached = keepa_cache.get(db, 2, asins, keepa_cache.max_age("market", max_age_days), Stage2Result)
+    missing = [a for a in asins if a not in cached]
+    if missing:
+        now = _keepa_now()
+        fresh = {p["asin"]: parse_stage2(p, now) for p in fetch_full(db, missing) if p.get("asin")}
+        keepa_cache.put(db, 2, fresh)
+        cached.update(fresh)
+    return cached
 
 
 def parse_stage2(product: dict, now: int | None = None) -> Stage2Result:

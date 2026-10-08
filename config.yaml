@@ -9,6 +9,13 @@
 live_pipeline:
   enabled: false   # turned off 2026-10-01 to free Keepa tokens for manual scans
 
+# Every Keepa lookup is saved (app/keepa_cache.py), so rule changes re-score
+# from stored data instead of paying again. Data older than these is
+# re-fetched. The live pipeline always reads fresh; scans take --fresh.
+keepa_cache:
+  max_age_days: 7             # prices, sales, sellers, Amazon on the listing
+  code_map_max_age_days: 60   # barcode -> ASIN matches, including "no match"
+
 thresholds:
   min_roi: 0.10                # hard-reject below this (spec default: 30%; 10% from 2026-10-07)
   min_net_profit_pence: 80     # hard-reject below this (spec default: £3; £1 on 2026-10-06, 80p on 2026-10-07 on industry advice)

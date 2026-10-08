@@ -65,13 +65,13 @@ def test_amazon_url_match_full_pass_pings_and_records(db_session, monkeypatch):
         final_url="https://www.amazon.co.uk/dp/B000WIDGT1?tag=x", html="<html></html>",
         status_code=200, blocked=False,
     ))
-    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean: {
+    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean, **_: {
         "B000WIDGT1": keepa_client.Stage1Result(
             asin="B000WIDGT1", title="Widget", category="Toys & Games",
             sales_rank=20000, est_sell_price_pence=2400, rank_history_days=200,
         )
     })
-    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins: {
+    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins, **_: {
         "B000WIDGT1": _stage2(asin="B000WIDGT1"),
     })
 
@@ -123,13 +123,13 @@ def test_gated_true_rejects_end_to_end(db_session, monkeypatch):
         final_url="https://www.amazon.co.uk/dp/B000GATED1?tag=x", html="<html></html>",
         status_code=200, blocked=False,
     ))
-    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean: {
+    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean, **_: {
         "B000GATED1": keepa_client.Stage1Result(
             asin="B000GATED1", title="Widget", category="Toys & Games",
             sales_rank=20000, est_sell_price_pence=2400, rank_history_days=200,
         )
     })
-    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins: {
+    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins, **_: {
         "B000GATED1": _stage2(asin="B000GATED1"),
     })
     import app.spapi_client as spapi_client
@@ -164,13 +164,13 @@ def test_approval_required_gating_warns_not_rejects(db_session, monkeypatch):
         final_url="https://www.amazon.co.uk/dp/B000APPRV1?tag=x", html="<html></html>",
         status_code=200, blocked=False,
     ))
-    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean: {
+    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean, **_: {
         "B000APPRV1": keepa_client.Stage1Result(
             asin="B000APPRV1", title="Widget", category="Toys & Games",
             sales_rank=20000, est_sell_price_pence=2400, rank_history_days=200,
         )
     })
-    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins: {
+    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins, **_: {
         "B000APPRV1": _stage2(asin="B000APPRV1"),
     })
     import app.spapi_client as spapi_client
@@ -199,13 +199,13 @@ def test_scan_source_skips_title_validation(db_session, monkeypatch):
         url=f"scan:{ean}:abc123", buy_price_pence=1000, image_url=None,
         html=f'<script type="application/ld+json">{{"@type":"Product","gtin13":"{ean}"}}</script>',
     )
-    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean: {
+    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean, **_: {
         codes[0]: keepa_client.Stage1Result(
             asin="B000SCAN01", title="Completely Unrelated Product Name",
             category="Toys & Games", sales_rank=20000, est_sell_price_pence=2400, rank_history_days=200,
         )
     })
-    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins: {
+    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins, **_: {
         "B000SCAN01": _stage2(asin="B000SCAN01"),
     })
     sent_embeds = []
@@ -330,13 +330,13 @@ def test_velocity_gate_rejects_low_sales_high_roi_deal(db_session, monkeypatch):
         final_url="https://www.amazon.co.uk/dp/B000BATMOB?tag=x", html="<html></html>",
         status_code=200, blocked=False,
     ))
-    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean: {
+    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean, **_: {
         "B000BATMOB": keepa_client.Stage1Result(
             asin="B000BATMOB", title="Batman Batmobile Toy", category="Toys & Games",
             sales_rank=20000, est_sell_price_pence=2500, rank_history_days=200,
         )
     })
-    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins: {
+    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins, **_: {
         "B000BATMOB": _stage2(
             asin="B000BATMOB", title="Batman Batmobile Toy", buybox_price_pence=2500,
             fba_offer_count=1, est_monthly_sales=4,
@@ -383,7 +383,7 @@ def test_title_search_fallback_matches_via_model_number(db_session, monkeypatch)
             sales_rank=5000, est_sell_price_pence=3000, rank_history_days=200,
         )
     monkeypatch.setattr(keepa_client, "search_by_term", fake_search_by_term)
-    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins: {
+    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins, **_: {
         "B000SEARCH1": _stage2(
             asin="B000SEARCH1", title="Forge Steel Drill", category="Tools & Home Improvement",
             sales_rank=5000, buybox_price_pence=3000, fba_offer_count=1, est_monthly_sales=40,
@@ -435,7 +435,7 @@ def test_title_search_result_is_cached_across_deals(db_session, monkeypatch):
     # Second deal's cache-hit path has no stage1 data attached (see
     # pipeline._try_title_search), so process_deal falls back to a plain
     # stage1_screen lookup -- stub it rather than hitting real Keepa.
-    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean: {})
+    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean, **_: {})
 
     pipeline.process_deal(db_session, _raw("https://www.hotukdeals.com/deals/drill-a-1111111"), _decision_cfg(), _fee_provider(), _APP_CFG)
     pipeline.process_deal(db_session, _raw("https://www.hotukdeals.com/deals/drill-b-2222222"), _decision_cfg(), _fee_provider(), _APP_CFG)
@@ -463,7 +463,7 @@ def test_full_title_search_fallback_for_gtin_less_source(db_session, monkeypatch
             category="DIY & Tools", sales_rank=8000, est_sell_price_pence=2000, rank_history_days=200,
         )
     monkeypatch.setattr(keepa_client, "search_by_term", fake_search_by_term)
-    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins: {
+    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins, **_: {
         "B000PAINT1": _stage2(
             asin="B000PAINT1", title="Dulux Easycare Matt Emulsion Paint Timeless 2.5L", category="DIY & Tools",
             sales_rank=8000, buybox_price_pence=2000, fba_offer_count=1, est_monthly_sales=40,
@@ -526,13 +526,13 @@ def test_keepa_fulfilment_fee_yields_clean_pass_not_estimated(db_session, monkey
         final_url="https://www.amazon.co.uk/dp/B000WIDGT2?tag=x", html="<html></html>",
         status_code=200, blocked=False,
     ))
-    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean: {
+    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean, **_: {
         "B000WIDGT2": keepa_client.Stage1Result(
             asin="B000WIDGT2", title="Widget", category="Toys & Games",
             sales_rank=20000, est_sell_price_pence=2400, rank_history_days=200,
         )
     })
-    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins: {
+    monkeypatch.setattr(keepa_client, "stage2_full", lambda db, asins, **_: {
         "B000WIDGT2": _stage2(asin="B000WIDGT2", fba_fulfilment_fee_pence=280, referral_fee_percentage=15.0),
     })
 
@@ -629,7 +629,7 @@ def test_same_price_resurface_is_skipped(db_session, monkeypatch):
         call_count["n"] += 1
         return resolver.ResolvedDeal(final_url="https://www.amazon.co.uk/dp/B000REPEAT?x", html="<html></html>", status_code=200, blocked=False)
     monkeypatch.setattr(resolver, "resolve", _resolve)
-    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean: {
+    monkeypatch.setattr(keepa_client, "stage1_screen", lambda db, codes, is_ean, **_: {
         "B000REPEAT": keepa_client.Stage1Result(
             asin="B000REPEAT", title="Widget", category="Toys & Games",
             sales_rank=200000, est_sell_price_pence=None, rank_history_days=None,

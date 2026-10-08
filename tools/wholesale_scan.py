@@ -75,18 +75,7 @@ from app import keepa_client, scan_store, spapi_client
 from app.config import get_config
 from app.database import SessionLocal
 from app.decision.engine import DecisionConfig, Verdict, resolve_sell_price, score_deal
-from app.keepa_client import (
-    KEEPA_DOMAIN,
-    _IDX_BUY_BOX_SHIPPING,
-    _IDX_NEW,
-    _IDX_SALES_RANK,
-    _category_name,
-    _csv_value,
-    _get_client,
-    _log_tokens,
-    _rank_history_days,
-    Stage1Result,
-)
+from app.keepa_client import Stage1Result
 from app.pricing.fees import SizeDims, build_fee_provider
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -197,44 +186,6 @@ def _bundle_units(feed_mult: int | None, asin_mult: int | None) -> int:
     return 1
 
 
-def _stage1_by_ean(db, eans_batch: list[str], source_name: str) -> dict[str, tuple[str, Stage1Result]]:
-    """Same query keepa_client.stage1_screen makes, but also returns eanList
-    so results can be mapped back to the specific input row -- stage1_screen
-    only keys by ASIN, useless here where we start from the EAN."""
-    client = _get_client()
-    tokens_before = client.tokens_left
-    products = client.query(
-        eans_batch, domain=KEEPA_DOMAIN, stats=90, offers=None,
-        product_code_is_asin=False, wait=True,
-    )
-    _log_tokens(db, f"{source_name}_stage1", len(eans_batch), tokens_before, client.tokens_left)
-
-    wanted = set(eans_batch)
-    matched: dict[str, tuple[str, Stage1Result]] = {}
-    for product in products:
-        asin = product.get("asin")
-        if not asin:
-            continue
-        hit_eans = [e for e in (product.get("eanList") or []) if e in wanted]
-        if not hit_eans:
-            continue
-        stats = product.get("stats") or {}
-        avg90 = stats.get("avg90")
-        current = stats.get("current")
-        est_sell = _csv_value(avg90, _IDX_BUY_BOX_SHIPPING) or _csv_value(avg90, _IDX_NEW)
-        s1 = Stage1Result(
-            asin=asin,
-            title=product.get("title"),
-            category=_category_name(product),
-            sales_rank=_csv_value(current, _IDX_SALES_RANK),
-            est_sell_price_pence=int(est_sell) if est_sell is not None else None,
-            rank_history_days=_rank_history_days(product),
-        )
-        for e in hit_eans:
-            matched[e] = (asin, s1)
-    return matched
-
-
 def _load_checkpoint(path: Path, key: str) -> dict[str, dict]:
     if not path.exists():
         return {}
@@ -249,7 +200,8 @@ def _load_checkpoint(path: Path, key: str) -> dict[str, dict]:
     return checkpoint
 
 
-def run_scan(source_name: str, rows: list[FeedRow], out_dir: Path | None = None, persist: bool = True) -> None:
+def run_scan(source_name: str, rows: list[FeedRow], out_dir: Path | None = None, persist: bool = True,
+             max_age_days: float | None = None) -> None:
     """source_name becomes the prefix for every output/checkpoint file
     (<source_name>_candidates.txt, <source_name>_stage{1,2}_checkpoint.jsonl)
     and the Keepa token-log stage label -- keep it short and stable across
@@ -263,10 +215,11 @@ def run_scan(source_name: str, rows: list[FeedRow], out_dir: Path | None = None,
 
     out_dir defaults to the repo root. persist=False keeps the results out of
     supplier_scan_results, for suppliers you'd never buy from (the sourcing
-    lookup treats anything there as a real source).
+    lookup treats anything there as a real source). max_age_days overrides
+    the Keepa cache age (0 = fetch everything fresh).
     """
     try:
-        _run_scan(source_name, rows, out_dir or _REPO_ROOT, persist)
+        _run_scan(source_name, rows, out_dir or _REPO_ROOT, persist, max_age_days)
     except BaseException as e:   # noqa: BLE001 -- re-raised immediately
         print(f"[SCAN:{source_name}] DIED: {type(e).__name__}: {e}")
         traceback.print_exc(file=sys.stdout)
@@ -274,7 +227,8 @@ def run_scan(source_name: str, rows: list[FeedRow], out_dir: Path | None = None,
         raise
 
 
-def _run_scan(source_name: str, rows: list[FeedRow], out_dir: Path, persist: bool) -> None:
+def _run_scan(source_name: str, rows: list[FeedRow], out_dir: Path, persist: bool,
+              max_age_days: float | None) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{source_name}_candidates.txt"
     stage1_checkpoint_path = out_dir / f"{source_name}_stage1_checkpoint.jsonl"
@@ -323,7 +277,7 @@ def _run_scan(source_name: str, rows: list[FeedRow], out_dir: Path, persist: boo
     with open(stage1_checkpoint_path, "a", encoding="utf-8") as ckpt:
         for i in range(0, len(eans), CHUNK):
             batch = eans[i:i + CHUNK]
-            matched = _stage1_by_ean(db, batch, source_name)
+            matched = keepa_client.stage1_by_code(db, batch, f"{source_name}_stage1", max_age_days)
             stage1_matched += len(matched)
             for ean in batch:
                 hit = matched.get(ean)
@@ -358,7 +312,7 @@ def _run_scan(source_name: str, rows: list[FeedRow], out_dir: Path, persist: boo
     with open(stage2_checkpoint_path, "a", encoding="utf-8") as ckpt:
         for i in range(0, len(survivor_asins), CHUNK):
             batch = survivor_asins[i:i + CHUNK]
-            stage2_by_asin = keepa_client.stage2_full(db, batch)
+            stage2_by_asin = keepa_client.stage2_full(db, batch, max_age_days)
             for asin in batch:
                 stage2 = stage2_by_asin.get(asin)
                 ean = stage1_survivors[asin]

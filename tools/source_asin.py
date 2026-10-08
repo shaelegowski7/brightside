@@ -62,7 +62,7 @@ def main(argv: list[str]) -> None:
     asin = asins[0]
 
     _use_local_db()
-    from app import keepa_client, sourcing, spapi_client
+    from app import keepa_cache, keepa_client, sourcing, spapi_client
     from app.assessment import assess
     from app.config import get_config, get_settings
     from app.database import SessionLocal
@@ -79,6 +79,7 @@ def main(argv: list[str]) -> None:
         sys.exit(f"{asin}: not found on Keepa")
     product = products[0]
     stage2 = keepa_client.parse_stage2(product)
+    keepa_cache.put(db, 2, {asin: stage2})   # always a live read, so it refreshes the cache
     a = assess(db, stage2, cfg, build_fee_provider(db, app_cfg), check_gating=spapi_client.is_configured())
 
     brand = product.get("brand") or product.get("manufacturer")
