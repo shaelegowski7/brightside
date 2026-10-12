@@ -87,3 +87,22 @@ def test_bundle_repricing_turns_a_phantom_win_into_a_loss():
     bundle_cost = unit_cost * units
     real_roi = (sell - fees - bundle_cost) / bundle_cost
     assert real_roi < 0.30                        # under the min_roi floor
+
+
+# Measurements read as pack sizes put a Bontempi drum set at 224 million
+# units (NDA Toys rescan, 2026-10-08). Real Amazon titles from that run.
+@pytest.mark.parametrize("title,expected", [
+    ("Bontempi | BeatFusion Pro: Premium Drum, Orange, 700 x 400 x 800 mm", 1),
+    ("Bontempi | SoundHub - Sound Box with 2 Microphones, 220 x 900 x 90 mm", 1),
+    ("KeyRhythm Digital Keyboard with 37 Keys, 21 x 7.8 x 2.75 inches", 1),
+    ("FlexBuddy - Flexible Electronic Battery with 9 Pads, 43.3 x 17 x 6.5 cm", 1),
+    ("Photo Frame 30 x 40 cm", 1),
+    ("USB-C cable 2 x 3m", 2),
+    ("Henbrandt 60 x Mini Brickz Temporary Tattoos 12pc", 60),
+])
+def test_measurements_are_not_pack_sizes(title, expected):
+    assert _pack_multiplier(title) == expected
+
+
+def test_absurd_pack_size_becomes_unknown():
+    assert _pack_multiplier("Bundle x 40 x 50 of things pack of 3") is None

@@ -133,6 +133,19 @@ _PACK_PATTERNS = [
 ]
 
 
+_UNIT = r"(?:mm|cm|m|in|inch(?:es)?|ft|\")"
+_NUM = r"\d+(?:\.\d+)?"
+# Measurements, not pack counts: "700 x 400 x 800 mm" read as packs priced a
+# Bontempi drum set at 224 million units (NDA Toys rescan, 2026-10-08).
+# Three-way "a x b x c" is always a measurement; two-way only with a unit
+# and a first figure over 10 or a decimal, so "2 x 3m cable" stays a 2-pack.
+_DIMENSION_RES = [
+    re.compile(rf"{_NUM}\s*{_UNIT}?\s*x\s*{_NUM}\s*{_UNIT}?\s*x\s*{_NUM}\s*{_UNIT}?"),
+    re.compile(rf"(?:\d{{3,}}|\d{{2,}}\.\d+|[1-9]\d+|\d+\.\d+)\s*{_UNIT}?\s*x\s*{_NUM}\s*{_UNIT}\b"),
+]
+_MAX_PACK_UNITS = 1000
+
+
 def _pack_multiplier(text: str | None) -> int | None:
     """How many sellable units a title implies, multiplying each distinct
     nesting level found (e.g. "Case of 8 Packs of 12" -> 8 * 12 = 96).
@@ -152,6 +165,8 @@ def _pack_multiplier(text: str | None) -> int | None:
     if not text:
         return None
     t = text.lower()
+    for dim in _DIMENSION_RES:
+        t = dim.sub(" ", t)
     found = []
     for pat in _PACK_PATTERNS:
         for m in pat.finditer(t):
@@ -166,7 +181,9 @@ def _pack_multiplier(text: str | None) -> int | None:
     total = 1
     for n in sorted(set(found), reverse=True):
         total *= n
-    return total
+    # Past this it's a misread, not a pack: report it as unknown so the
+    # row is flagged for a check by hand instead of costed absurdly.
+    return total if total <= _MAX_PACK_UNITS else None
 
 
 def _bundle_units(feed_mult: int | None, asin_mult: int | None) -> int:
