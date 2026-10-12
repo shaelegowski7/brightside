@@ -188,6 +188,20 @@ def no_route_signals(product: dict, main_seller_country: str | None,
     return signals
 
 
+def no_route_signals_from_stage2(stage2) -> list[str]:
+    """no_route_signals from a (cached) Stage2Result instead of the raw product."""
+    signals = []
+    if stage2.main_seller_country in ("CN", "HK"):
+        signals.append(f"main buy-box seller is based in {stage2.main_seller_country}")
+    if stage2.ships_from_china:
+        signals.append("an offer ships from China")
+    if (stage2.top_buybox_share_90 or 0) >= 90:
+        signals.append(f"one seller won {stage2.top_buybox_share_90:.0f}% of the buy box over 90 days")
+    if stage2.brand_matches_main_seller:
+        signals.append("the brand itself holds the buy box")
+    return signals
+
+
 # --- 5. web ---
 
 def _host_and_url(displayed_link: str) -> tuple[str, str]:

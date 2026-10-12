@@ -54,6 +54,50 @@ def _cached_search(search, key: str, refresh: bool):
     return run, save, spent
 
 
+def load_vault() -> tuple[dict, str]:
+    """(Wholesaler Board, Supplier Master List text) from the vault."""
+    board_path = _SOURCING / "wholesaler_board.json"
+    board = json.loads(board_path.read_text(encoding="utf-8")) if board_path.exists() else {}
+    master_path = _VAULT / "Supplier Master List.md"
+    return board, master_path.read_text(encoding="utf-8") if master_path.exists() else ""
+
+
+def gather_leads(db, report, title: str | None, no_route: list[str], key: str, flags: set[str],
+                 vault: tuple[dict, str] | None = None) -> None:
+    """Fill report.leads/no_route_signals/board_note/verdict: offline evidence
+    first, the web only when that leaves fewer than two known suppliers."""
+    from app import sourcing
+    from app.sources.scraperapi import google_search
+    board, master = vault or load_vault()
+    asin, brand, eans = report.asin, report.brand, report.eans
+
+    board_leads, report.board_note = sourcing.board_hits(board, asin, brand)
+    leads = sourcing.scan_hits(db, asin, eans) + board_leads + sourcing.master_list_leads(master, brand)
+    report.no_route_signals = no_route
+
+    known = [l for l in leads if l.kind in ("stocks_it", "known_supplier")]
+    skip_web = "--no-web" in flags or (not {"--web"} & flags and (
+        any(l.kind == "stocks_it" for l in leads) or len({l.name for l in known}) >= 2))
+    if not skip_web and not key:
+        print("[SOURCE] no SCRAPERAPI_KEY -- run under `railway run` for the web step; skipping it")
+    elif not skip_web:
+        search, save, spent = _cached_search(lambda q: google_search(q, key), brand or asin, "--refresh" in flags)
+        leads += sourcing.web_leads(search, brand, eans, title)
+        save()
+        print(f"[SOURCE] {asin} web: {len(spent)} new search(es), the rest from cache")
+
+    deduped: dict[str, sourcing.Lead] = {}
+    for lead in leads:
+        k = sourcing.norm(lead.name)
+        if not any(k and (k in other or other in k) for other in deduped):
+            deduped[k] = lead
+    for lead in deduped.values():
+        lead.status = lead.status or sourcing.status_for(
+            master, lead.name, (lead.url or "").split("/")[2] if lead.url else "")
+    report.leads = list(deduped.values())
+    report.verdict = sourcing.verdict(report)
+
+
 def main(argv: list[str]) -> None:
     flags = {a for a in argv if a.startswith("--")}
     asins = [a.upper() for a in argv if not a.startswith("--")]
@@ -68,7 +112,6 @@ def main(argv: list[str]) -> None:
     from app.database import SessionLocal
     from app.decision.engine import DecisionConfig
     from app.pricing.fees import build_fee_provider
-    from app.sources.scraperapi import google_search
 
     db = SessionLocal()
     app_cfg = get_config()
@@ -86,44 +129,14 @@ def main(argv: list[str]) -> None:
     eans = list(dict.fromkeys((product.get("eanList") or []) + (product.get("upcList") or [])))
     report = sourcing.SourcingReport(asin=asin, title=product.get("title"), brand=brand, eans=eans)
 
-    board_path = _SOURCING / "wholesaler_board.json"
-    board = json.loads(board_path.read_text(encoding="utf-8")) if board_path.exists() else {}
-    master_path = _VAULT / "Supplier Master List.md"
-    master = master_path.read_text(encoding="utf-8") if master_path.exists() else ""
-
-    board_leads, report.board_note = sourcing.board_hits(board, asin, brand)
-    leads = sourcing.scan_hits(db, asin, eans) + board_leads + sourcing.master_list_leads(master, brand)
-
-    main_seller = keepa_client.main_seller_id(product)
-    report.no_route_signals = sourcing.no_route_signals(
-        product, keepa_client._seller_country_cache.get(main_seller), stage2.brand_matches_main_seller)
-
-    key = get_settings().scraperapi_key
-    known = [l for l in leads if l.kind in ("stocks_it", "known_supplier")]
-    skip_web = "--no-web" in flags or (not {"--web"} & flags and (
-        any(l.kind == "stocks_it" for l in leads) or len({l.name for l in known}) >= 2))
-    if not skip_web and not key:
-        print("[SOURCE] no SCRAPERAPI_KEY -- run under `railway run` for the web step; skipping it")
-    elif not skip_web:
-        search, save, spent = _cached_search(lambda q: google_search(q, key), brand or asin, "--refresh" in flags)
-        leads += sourcing.web_leads(search, brand, eans, product.get("title"))
-        save()
-        print(f"[SOURCE] web: {len(spent)} new search(es), the rest from cache")
-
-    deduped: dict[str, sourcing.Lead] = {}
-    for lead in leads:
-        k = sourcing.norm(lead.name)
-        if not any(k and (k in other or other in k) for other in deduped):
-            deduped[k] = lead
-    for lead in deduped.values():
-        lead.status = lead.status or sourcing.status_for(
-            master, lead.name, (lead.url or "").split("/")[2] if lead.url else "")
-    report.leads = list(deduped.values())
-    report.verdict = sourcing.verdict(report)
+    gather_leads(db, report, product.get("title"), sourcing.no_route_signals(
+        product, keepa_client._seller_country_cache.get(keepa_client.main_seller_id(product)),
+        stage2.brand_matches_main_seller), get_settings().scraperapi_key, flags)
 
     r = a.result
     assessment_lines = [
-        f"Sells £{a.sell_price_pence / 100:.2f} · {f'{stage2.est_monthly_sales:.0f}' if stage2.est_monthly_sales else '?'} a month · "
+        f"Sells £{a.sell_price_pence / 100:.2f} · {f'{stage2.est_monthly_sales:.0f}' if stage2.est_monthly_sales else 'no sales figure'} a month"
+        f" (rank model {f'~{stage2.model_monthly_sales:.0f}' if stage2.model_monthly_sales else 'n/a'}) · "
         f"{stage2.fba_offer_count} FBA sellers · gating {a.gating_status or 'unchecked'}  ",
         (f"Buy at or below **£{a.target_buy_price_pence / 100:.2f}** for {cfg.min_roi:.0%} ROI and "
          f"£{cfg.min_net_profit_pence / 100:.2f} profit" if a.target_buy_price_pence
