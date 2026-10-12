@@ -229,11 +229,17 @@ candidate_finder:
   max_results: 50
   # £20. Below this, FBA fees force an unrealistic discount (a £12 buybox
   # needs sourcing at £2.81 -- 77% off) so it's not worth the tokens.
-  min_buybox_pence: 2000
+  min_buybox_pence: 800    # £20 -> £8 on 2026-10-09: the £20 floor only existed for the old 30% ROI / £3 profit rules
   # £120. Caps capital tied up per unit -- without it the list fills with
   # £250-450 renewed phones/tablets (they dominate the top sales ranks),
   # which need hundreds of pounds per unit before a single sale.
   max_buybox_pence: 12000
+  # Drop anything whose target buy price is more than this fraction below
+  # the sell price. Branded stock from UK wholesale runs ~40-55% under the
+  # Amazon price, so a pass needing 77% off (Energizer AAA 24-pack: £8.84
+  # sell, £2.05 target) is unsourceable. Added 2026-10-10 once the £8 floor
+  # let 73% of scored products "pass"; 0.50 kept 441 of 1,574.
+  max_discount_from_sell: 0.50
   # Deliberately looser than category_rank_thresholds' 80k for toys: this
   # is a sourcing shortlist for a human to judge, not an auto-buy gate,
   # and rank alone is a weak signal once velocity is already filtered on.
@@ -267,7 +273,7 @@ candidate_finder:
   #
   # Keepa BUCKETS monthlySold and its lowest bucket is 50, so the previous
   # value of 10 was never really asking for 10 -- nothing below 50 exists.
-  min_monthly_sold: 200
+  min_monthly_sold: 50     # 200 -> 50 on 2026-10-09 to match velocity.min_monthly_sales
   # Distinct sellers who held the buy box over the last 365 days -- the
   # SOURCEABILITY filter, and the one that matters most for a shopping list.
   # min_fba_offers counts who is competing today, which a brand owner plus a

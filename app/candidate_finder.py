@@ -384,6 +384,9 @@ def score_asins(
         target = target_buy_price_pence(sell_price, cost_breakdown(inp, sell_price, cfg)["non_buy_costs_pence"], cfg)
         if target <= 0:
             continue
+        max_discount = finder_cfg.get("max_discount_from_sell")
+        if max_discount is not None and 1 - target / sell_price > max_discount:
+            continue
         # Every other hard rule, at the price we'd actually pay.
         result = score_deal(replace(inp, buy_price_pence=target), cfg)
         if result.verdict == Verdict.REJECT:

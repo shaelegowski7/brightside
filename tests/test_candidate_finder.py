@@ -371,3 +371,42 @@ def test_find_candidates_reverifies_min_fba_offers_against_stage2(db_session, mo
 
     found = candidate_finder.find_candidates(db_session, app_cfg, _cfg(), fee_provider)
     assert found == []
+
+
+def test_find_candidates_drops_products_needing_too_deep_a_discount(db_session, monkeypatch):
+    """max_discount_from_sell: a product that clears ROI/profit only at a
+    buy price no wholesaler would offer (Energizer AAA 24-pack, £8.84 sell,
+    £2.05 target = 77% off, 2026-10-10) is noise on a sourcing list. Same
+    price, same everything, except a fee large enough to push the target
+    past 50% off."""
+    monkeypatch.setattr(keepa_client, "find_asins", lambda db, params, n: ["B0SHALLOW", "B0DEEP"])
+
+    def stage2(asin, fba_fee):
+        return keepa_client.Stage2Result(
+            asin=asin, title=asin, category="Toys & Games", sales_rank=5000,
+            buybox_price_pence=3000, amazon_on_listing=False, fba_offer_count=2,
+            lowest_fba_offer_pence=None, est_monthly_sales=40.0, buybox_avg_90d_pence=3000,
+            rank_history_days=400, hazmat=False, package_weight_kg=0.2,
+            package_longest_cm=10.0, package_dims_sum_cm=20.0,
+            fba_fulfilment_fee_pence=fba_fee, referral_fee_percentage=15.0,
+            leaf_category_id=None, leaf_category_rank=None,
+        )
+
+    monkeypatch.setattr(keepa_client, "stage2_full",
+                        lambda db, asins: {"B0SHALLOW": stage2("B0SHALLOW", 200), "B0DEEP": stage2("B0DEEP", 1500)})
+
+    from app.config import get_config
+    from app.pricing import fees as fees_module
+
+    app_cfg = dict(get_config())
+    finder = {"max_sales_rank": 120000, "min_buybox_pence": 2000, "max_results": 50}
+    fee_provider = fees_module.build_fee_provider(db_session, app_cfg)
+
+    app_cfg["candidate_finder"] = finder
+    assert {c.asin for c in candidate_finder.find_candidates(db_session, app_cfg, _cfg(), fee_provider)} == {
+        "B0SHALLOW", "B0DEEP"}
+
+    app_cfg["candidate_finder"] = {**finder, "max_discount_from_sell": 0.50}
+    found = candidate_finder.find_candidates(db_session, app_cfg, _cfg(), fee_provider)
+    assert [c.asin for c in found] == ["B0SHALLOW"]
+    assert 1 - found[0].target_buy_price_pence / 3000 <= 0.50
