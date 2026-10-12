@@ -9,6 +9,13 @@ _BASE_URL = "http://api.scraperapi.com/"
 _TIMEOUT_SECONDS = 60
 
 
+def _redact(e: Exception, api_key: str) -> str:
+    """requests puts the full URL, api_key query param included, into
+    HTTPError messages -- and these logs land in the Obsidian vault
+    (a 500 on 2026-10-10 wrote the key into a scan log)."""
+    return str(e).replace(api_key, "***") if api_key else str(e)
+
+
 def fetch(url: str, api_key: str, ultra_premium: bool = False) -> tuple[int, str] | None:
     """Returns (status_code, body), or None on a request-level failure
     (timeout, connection error) — kept distinct from a non-200 response,
@@ -28,7 +35,7 @@ def fetch(url: str, api_key: str, ultra_premium: bool = False) -> tuple[int, str
     try:
         resp = requests.get(_BASE_URL, params=params, timeout=_TIMEOUT_SECONDS)
     except requests.RequestException as e:
-        print(f"[SCRAPERAPI] {url}: request failed: {e}")
+        print(f"[SCRAPERAPI] {url}: request failed: {_redact(e, api_key)}")
         return None
     return resp.status_code, resp.text
 
@@ -47,5 +54,5 @@ def google_search(query: str, api_key: str) -> list[dict]:
         resp.raise_for_status()
         return resp.json().get("organic_results") or []
     except (requests.RequestException, ValueError) as e:
-        print(f"[SCRAPERAPI] search {query!r} failed: {e}")
+        print(f"[SCRAPERAPI] search {query!r} failed: {_redact(e, api_key)}")
         return []
