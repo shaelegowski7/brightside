@@ -119,6 +119,10 @@ def parse_input(args: list[str], default_price_pence: int | None) -> list[tuple[
     return rows
 
 
+def _model_str(stage2) -> str:
+    return f"~{stage2.model_monthly_sales:.0f}" if stage2.model_monthly_sales else "n/a"
+
+
 def _format_entry(asin, stage2, name, buy_price_pence, result, cfg, costs, sell_price, target,
                   category_rank_percentile, gating_status) -> str:
     pct = f"{category_rank_percentile:.3%}" if category_rank_percentile is not None else "n/a"
@@ -129,7 +133,8 @@ def _format_entry(asin, stage2, name, buy_price_pence, result, cfg, costs, sell_
     lines = [
         f"{asin} | {stage2.title or name or '?'}",
         f"  category {stage2.category!r} | rank 90d avg {stage2.sales_rank_avg90} (leaf pct {pct})"
-        f" | offers {stage2.fba_offer_count} | est sales/mo {stage2.est_monthly_sales}"
+        f" | offers {stage2.fba_offer_count} | sales/mo {stage2.est_monthly_sales or 'no figure'}"
+        f" (rank model {_model_str(stage2)})"
         f" | amazon_on_listing {stage2.amazon_on_listing} (in stock {amazon_stock} of 90d)"
         f" | gating {gating_status or 'unchecked'}",
         f"  sell {sell_price / 100:.2f} ({price_source}, 90d avg {avg90})"

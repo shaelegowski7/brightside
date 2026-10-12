@@ -83,6 +83,7 @@ class ScoreInput:
     sellers_active_90d: int | None = None
     brand_matches_main_seller: bool | None = None
     is_variation: bool = False
+    model_monthly_sales: float | None = None   # rank-model estimate; never the only evidence for a pass
     start_month: int = field(default_factory=lambda: date.today().month)
 
 
@@ -221,12 +222,15 @@ def velocity(inp: ScoreInput, cfg: DecisionConfig) -> tuple[bool, str | None]:
 
 
 def _effective_monthly_sales(inp: ScoreInput, cfg: DecisionConfig) -> float | None:
-    """The badge, or for a rank-test pass with no badge the velocity floor --
-    it cleared the gate, so it sells at least that."""
+    """The badge; for a rank-test pass with no badge, the rank model's
+    estimate, else the velocity floor. Feeds storage months and the
+    sales-per-seller rule, never the velocity gate itself."""
     if inp.est_monthly_sales:
         return inp.est_monthly_sales
     passed, _ = velocity(inp, cfg)
-    return cfg.velocity_min_monthly_sales if passed else None
+    if not passed:
+        return None
+    return inp.model_monthly_sales or cfg.velocity_min_monthly_sales
 
 
 def months_to_sell(est_monthly_sales: float | None, fba_offer_count: int, cfg: DecisionConfig) -> float:
@@ -405,6 +409,9 @@ def score_deal(inp: ScoreInput, cfg: DecisionConfig) -> ScoreResult:
         flags.append(f"price_trending_down: 30-day avg {inp.buybox_avg_30d_pence}p vs 90-day {inp.buybox_avg_90d_pence}p")
     if inp.is_variation:
         flags.append("variation_listing")
+    if (velocity_basis != "monthly_sold" and inp.model_monthly_sales is not None
+            and inp.model_monthly_sales < cfg.velocity_min_monthly_sales):
+        flags.append(f"low_model_sales: passed on rank, but the rank model estimates ~{inp.model_monthly_sales:.0f}/mo")
     if inp.category in cfg.expiry_dated_categories:
         flags.append("expiry_dated_category")
     if inp.brand_matches_main_seller:

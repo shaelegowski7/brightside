@@ -42,7 +42,7 @@ import requests
 from sqlalchemy.orm import Session
 from urllib3.exceptions import ProtocolError
 
-from . import keepa_cache, models
+from . import keepa_cache, models, sales_model
 from .config import get_config, get_settings
 from .decision.engine import DecisionConfig, FeeInput, ScoreInput
 from .pricing.fees import FeeProvider
@@ -217,9 +217,10 @@ def _value_at(history: list, at: int) -> int | None:
     return value if value is not None and value >= 0 else None
 
 
-def _time_weighted_avg(history: list, since: int, now: int) -> float | None:
+def _time_weighted_avg(history: list, since: int, now: int, min_coverage: int = 0) -> float | None:
     """Mean of a flat [time, value, ...] history over [since, now], each value
-    weighted by how long it held. -1 (no data) spans are skipped."""
+    weighted by how long it held. -1 (no data) spans are skipped, and None is
+    returned unless real data covers at least `min_coverage` minutes."""
     pairs = list(zip(history[0::2], history[1::2]))
     total = weight = 0.0
     for i, (t, v) in enumerate(pairs):
@@ -229,7 +230,7 @@ def _time_weighted_avg(history: list, since: int, now: int) -> float | None:
             continue
         total += v * (end - start)
         weight += end - start
-    return total / weight if weight else None
+    return total / weight if weight and weight >= min_coverage else None
 
 
 def _amazon_instock_pct_90(stats: dict) -> float | None:
@@ -388,6 +389,14 @@ class Stage2Result:
     sellers_active_90d: int | None = None
     brand_matches_main_seller: bool | None = None
     is_variation: bool = False
+    sales_rank_avg30: int | None = None
+    model_monthly_sales: float | None = None   # rank -> sales estimate, see app/sales_model.py
+    # For the sourcing lookup, so it can run off cached results:
+    brand: str | None = None
+    eans: list | None = None
+    main_seller_country: str | None = None   # ISO code from the seller lookup (GB, CN, HK...)
+    top_buybox_share_90: float | None = None   # 0-100, largest single seller's buy-box share
+    ships_from_china: bool = False
 
 
 def _stage1_from_product(product: dict) -> Stage1Result:
@@ -614,8 +623,10 @@ def parse_stage2(product: dict, now: int | None = None) -> Stage2Result:
 
     since_90d = now - 90 * _DAY_MINUTES
     leaf_history = (product.get("salesRanks") or {}).get(str(leaf_cat_id)) if leaf_cat_id else None
-    leaf_rank_avg90 = _time_weighted_avg(leaf_history, since_90d, now) if leaf_history else None
+    leaf_rank_avg90 = (_time_weighted_avg(leaf_history, since_90d, now, min_coverage=30 * _DAY_MINUTES)
+                       if leaf_history else None)
     sales_rank_avg90 = _csv_value(avg90, _IDX_SALES_RANK)
+    sales_rank_avg30 = _csv_value(stats.get("avg30"), _IDX_SALES_RANK)
     buybox_avg_30d = _csv_value(stats.get("avg30"), _IDX_BUY_BOX_SHIPPING)
     fba_history = csv[_IDX_COUNT_NEW_FBA] if len(csv) > _IDX_COUNT_NEW_FBA and csv[_IDX_COUNT_NEW_FBA] else []
     main_seller = main_seller_id(product)
@@ -652,14 +663,25 @@ def parse_stage2(product: dict, now: int | None = None) -> Stage2Result:
         brand_matches_main_seller=_brand_matches_seller(
             product.get("brand"), _seller_name_cache.get(main_seller, ())) if main_seller else None,
         is_variation=bool(parent_asin),
+        sales_rank_avg30=int(sales_rank_avg30) if sales_rank_avg30 is not None else None,
+        model_monthly_sales=sales_model.estimate(
+            _category_name(product), sales_rank_avg30 if sales_rank_avg30 is not None else sales_rank),
+        brand=product.get("brand") or product.get("manufacturer"),
+        eans=list(dict.fromkeys((product.get("eanList") or []) + (product.get("upcList") or []))) or None,
+        main_seller_country=_seller_country_cache.get(main_seller) if main_seller else None,
+        top_buybox_share_90=max((v.get("percentageWon") or 0 for v in (stats.get("buyBoxStats") or {}).values()),
+                                default=None),
+        ships_from_china=any(o.get("shipsFromChina") for o in product.get("offers") or []),
     )
 
 
 def leaf_rank_stats(db: Session, stage2: Stage2Result) -> tuple[float | None, int | None]:
     """(90-day average leaf rank / leaf category size, leaf category size)
-    for the velocity gate. Falls back to the current leaf rank when there's
-    no 90-day history."""
-    rank = stage2.leaf_rank_avg90 if stage2.leaf_rank_avg90 is not None else stage2.leaf_category_rank
+    for the velocity gate. No fallback to the current leaf rank: a single
+    reading with no history isn't sales evidence (Bullyland Wonder Woman
+    B0GS9RCF8L passed as "top 1.4% of Statues" on a current rank alone while
+    SellerAmp showed no BSR and 0 rank drops in 30 days, 2026-10-08)."""
+    rank = stage2.leaf_rank_avg90
     if stage2.leaf_category_id is None or rank is None:
         return None, None
     size = get_category_size(db, stage2.leaf_category_id)
@@ -700,6 +722,7 @@ def score_input_from_stage2(
         sellers_active_90d=stage2.sellers_active_90d,
         brand_matches_main_seller=stage2.brand_matches_main_seller,
         is_variation=stage2.is_variation,
+        model_monthly_sales=stage2.model_monthly_sales,
     )
 
 

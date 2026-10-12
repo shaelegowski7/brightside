@@ -426,3 +426,18 @@ def test_hazmat_storage_uses_dangerous_goods_rates():
     cfg = _full_cfg(reject_hazmat=False)
     assert score_deal(_healthy(**slow), cfg).fees_breakdown["storage_cost_pence"] == 108
     assert score_deal(_healthy(hazmat=True, **slow), cfg).fees_breakdown["storage_cost_pence"] == 92
+
+
+def test_rank_model_estimate_drives_storage_and_seller_share_on_a_rank_pass():
+    # no badge, top-1% leaf rank; the model says ~20/mo
+    base = dict(est_monthly_sales=None, category_rank_percentile=0.01, model_monthly_sales=20.0, fba_offer_count=1)
+    r = score_deal(_healthy(**base), _full_cfg())
+    assert r.est_months_to_sell == 5.0                     # 50 units / (20 / 2)
+    assert any(f.startswith("low_model_sales") for f in r.flags)
+    crowded = score_deal(_healthy(**{**base, "fba_offer_count": 3}), _full_cfg())
+    assert crowded.verdict_reason.startswith("sales_per_seller 5.0/mo")
+
+
+def test_rank_model_never_passes_velocity_alone():
+    r = score_deal(_healthy(est_monthly_sales=None, category_rank_percentile=None, model_monthly_sales=500.0), _full_cfg())
+    assert r.verdict_reason.startswith("velocity_floor")

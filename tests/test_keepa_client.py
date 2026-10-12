@@ -353,3 +353,18 @@ def test_stage1_screen_price_floor_does_not_fire_without_price_history():
         cfg=_stage1_cfg(min_sell_price_pence=2000), fees=_FlatFees(),
     )
     assert passes is True
+
+
+def test_leaf_rank_needs_30_days_of_history_in_the_window(db_session, monkeypatch):
+    """B0GS9RCF8L: a current leaf rank but no rank data in the last 90 days
+    must not count as top-2% sales evidence."""
+    now, day = keepa_client._keepa_now(), keepa_client._DAY_MINUTES
+    product = _product()
+    product["categoryTree"] = [{"catId": 1, "name": "Toys & Games"}, {"catId": 2, "name": "Statues"}]
+    product["salesRanks"] = {"2": [now - 200 * day, 798, now - 120 * day, -1]}
+    r = _stage2_of(db_session, monkeypatch, product)
+    assert r.leaf_category_rank == 798 and r.leaf_rank_avg90 is None
+    assert keepa_client.leaf_rank_stats(db_session, r) == (None, None)
+
+    product["salesRanks"] = {"2": [now - 200 * day, -1, now - 10 * day, 500]}   # only 10 days of data
+    assert _stage2_of(db_session, monkeypatch, product).leaf_rank_avg90 is None
